@@ -1,0 +1,23 @@
+BasicRanged(
+    energy_cost: 0,
+    buildup_duration: 0.75,
+    recover_duration: 1.6,
+    projectile: (
+        kind: Hazard(
+            is_sticky: true,
+            duration: 3,
+        ),
+        attack: Some((
+            damage: 20,
+        )),
+    ),
+    projectile_body: Object(StrigoiHead),
+    projectile_light: None,
+    projectile_speed: 40.0,
+    num_projectiles: Value(2),
+    projectile_spread: Some(Increasing(0.1)),
+    movement_modifier: (
+        buildup: Some(0.3),
+        recover: Some(0.3),
+    ),
+)

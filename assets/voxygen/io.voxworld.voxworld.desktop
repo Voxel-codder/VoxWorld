@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Vox World
+Comment=Vox World is a multiplayer voxel RPG written in Rust
+Comment[de]=Vox World ist ein in Rust geschriebenes Mehrspieler Voxel RPG
+Exec=voxworld-client
+Categories=Game;Simulation;
+Keywords=voxworld;vox;world;sandbox;blocks;nodes;multiplayer;roleplaying;
+Icon=io.voxworld.voxworld
+Terminal=false
