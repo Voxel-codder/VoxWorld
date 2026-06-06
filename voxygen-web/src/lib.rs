@@ -2,7 +2,13 @@
 
 mod world_preview;
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, num::NonZeroU64, rc::Rc};
+
+use common::{
+    comp::inventory::slot::InvSlotId,
+    trade::{PendingTrade, TradeAction, TradePhase},
+    uid::Uid,
+};
 use vek::Vec2;
 use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
 use web_sys::{Document, Element, HtmlCanvasElement, KeyboardEvent, Window};
@@ -287,26 +293,9 @@ impl TradeInput {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PreviewTradePhase {
-    Mutate,
-    Review,
-    Complete,
-}
-
-impl PreviewTradePhase {
-    fn label(self) -> &'static str {
-        match self {
-            PreviewTradePhase::Mutate => "Mutate",
-            PreviewTradePhase::Review => "Review",
-            PreviewTradePhase::Complete => "Complete",
-        }
-    }
-}
-
 struct PreviewTradeSession {
     panel: TradePanelPreview,
-    phase: PreviewTradePhase,
+    model: PendingTrade,
     selected_wares: Vec<usize>,
 }
 
@@ -314,13 +303,13 @@ impl PreviewTradeSession {
     fn new(panel: TradePanelPreview) -> Self {
         Self {
             panel,
-            phase: PreviewTradePhase::Mutate,
+            model: PendingTrade::new(preview_trade_uid(1), preview_trade_uid(2)),
             selected_wares: Vec::new(),
         }
     }
 
     fn select_ware(&mut self, index: usize) {
-        if self.phase != PreviewTradePhase::Mutate || index >= self.panel.wares.len() {
+        if self.model.phase() != TradePhase::Mutate || index >= self.panel.wares.len() {
             return;
         }
         if let Some(existing) = self.selected_wares.iter().position(|ware| *ware == index) {
@@ -329,23 +318,23 @@ impl PreviewTradeSession {
             self.selected_wares.push(index);
             self.selected_wares.sort_unstable();
         }
+        self.sync_model_offers();
     }
 
     fn clear_offer(&mut self) {
         self.selected_wares.clear();
-        self.phase = PreviewTradePhase::Mutate;
+        self.model = PendingTrade::new(preview_trade_uid(1), preview_trade_uid(2));
     }
 
     fn accept(&mut self) {
-        match self.phase {
-            PreviewTradePhase::Mutate if !self.selected_wares.is_empty() => {
-                self.phase = PreviewTradePhase::Review;
-            },
-            PreviewTradePhase::Review => {
-                self.phase = PreviewTradePhase::Complete;
-            },
-            PreviewTradePhase::Mutate | PreviewTradePhase::Complete => {},
+        if self.model.phase() == TradePhase::Complete || self.selected_wares.is_empty() {
+            return;
         }
+        let phase = self.model.phase();
+        self.model
+            .process_trade_action(0, TradeAction::Accept(phase), &[]);
+        self.model
+            .process_trade_action(1, TradeAction::Accept(phase), &[]);
     }
 
     fn player_coin_offer(&self) -> f32 {
@@ -371,6 +360,31 @@ impl PreviewTradeSession {
             .map(|ware| ware.name.clone())
             .collect()
     }
+
+    fn phase(&self) -> TradePhase { self.model.phase() }
+
+    fn player_offer_slots(&self) -> usize { self.model.offers[0].len() }
+
+    fn merchant_offer_slots(&self) -> usize { self.model.offers[1].len() }
+
+    fn sync_model_offers(&mut self) {
+        self.model.offers[0].clear();
+        self.model.offers[1].clear();
+        if self.selected_wares.is_empty() {
+            self.model.accept_flags = [false, false];
+            return;
+        }
+        self.model.offers[0].insert(InvSlotId::new(0, 0), 1);
+        for index in &self.selected_wares {
+            self.model.offers[1]
+                .insert(InvSlotId::new(0, (*index).min(u16::MAX as usize) as u16), 1);
+        }
+        self.model.accept_flags = [false, false];
+    }
+}
+
+fn preview_trade_uid(id: u64) -> Uid {
+    Uid(NonZeroU64::new(id).expect("preview trade uid must be non-zero"))
 }
 
 fn camera_forward_world() -> Vec2<f32> {
@@ -1613,7 +1627,7 @@ fn set_trade_panel(session: Option<&PreviewTradeSession>) {
         title.set_text_content(Some(&panel.title));
     }
     if let Some(phase) = document.get_element_by_id(TRADE_PHASE_ID) {
-        phase.set_text_content(Some(session.phase.label()));
+        phase.set_text_content(Some(trade_phase_label(session.phase())));
     }
     if let Some(stock) = document.get_element_by_id(TRADE_STOCK_ID) {
         stock.set_inner_html("");
@@ -1744,28 +1758,38 @@ fn append_price_cell(document: &Document, parent: &Element, label: &str, value: 
 }
 
 fn trade_balance_summary(session: &PreviewTradeSession) -> String {
-    match session.phase {
-        PreviewTradePhase::Mutate if session.selected_wares.is_empty() => {
-            "No offer selected".to_owned()
-        },
-        PreviewTradePhase::Mutate => format!(
-            "Offer mutating: player pays {} for {} item(s), merchant sell value {}",
+    match session.phase() {
+        TradePhase::Mutate if session.selected_wares.is_empty() => "No offer selected".to_owned(),
+        TradePhase::Mutate => format!(
+            "Offer mutating: player pays {} for {} item(s), merchant sell value {} (model slots \
+             {}/{})",
+            format_coin_amount(session.player_coin_offer()),
+            session.selected_wares.len(),
+            format_coin_amount(session.merchant_sell_value()),
+            session.player_offer_slots(),
+            session.merchant_offer_slots()
+        ),
+        TradePhase::Review => format!(
+            "Reviewing: player pays {} for {} item(s), merchant sell value {} (PendingTrade \
+             Review)",
             format_coin_amount(session.player_coin_offer()),
             session.selected_wares.len(),
             format_coin_amount(session.merchant_sell_value())
         ),
-        PreviewTradePhase::Review => format!(
-            "Reviewing: player pays {} for {} item(s), merchant sell value {}",
-            format_coin_amount(session.player_coin_offer()),
-            session.selected_wares.len(),
-            format_coin_amount(session.merchant_sell_value())
-        ),
-        PreviewTradePhase::Complete => format!(
-            "Preview complete: {} item(s) for {}, merchant sell value {}",
+        TradePhase::Complete => format!(
+            "Preview complete: {} item(s) for {}, merchant sell value {} (PendingTrade Complete)",
             session.selected_wares.len(),
             format_coin_amount(session.player_coin_offer()),
             format_coin_amount(session.merchant_sell_value())
         ),
+    }
+}
+
+fn trade_phase_label(phase: TradePhase) -> &'static str {
+    match phase {
+        TradePhase::Mutate => "Mutate",
+        TradePhase::Review => "Review",
+        TradePhase::Complete => "Complete",
     }
 }
 

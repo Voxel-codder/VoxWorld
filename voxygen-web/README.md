@@ -77,10 +77,10 @@ Current milestone:
 - open a browser-side trade panel when `E`/`Enter` targets a trader or market
   board, showing the selected town, site stock, representative wares, quality,
   and buy/sell coin prices from the original economy path;
-- track a browser-side pending-trade preview state with Mutate, Review, and
-  Complete phases, selected merchant wares, a player coin offer, and buy/sell
-  balance text so the web trade flow mirrors the shape of Voxygen's
-  `PendingTrade` flow before server-authoritative actions are attached;
+- track a browser-side pending-trade preview state backed by the original
+  `common::trade::PendingTrade` phase and accept flow, with selected merchant
+  wares, a player coin offer, and buy/sell balance text before
+  server-authoritative inventory actions are attached;
 - preserve original `EntityInfo.body` categories in the web preview and render
   body-aware temporary silhouettes for humanoid, quadruped, flyer, fish, large,
   and object entities;
