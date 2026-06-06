@@ -17,6 +17,8 @@ occasional compatibility changes between builds.
 - `server-cli/` - dedicated server command-line entry point
 - `server/` - game server systems and persistence
 - `client/` - client-side game logic
+- `web-client/` - browser/WASM client porting surface
+- `web-gateway/` - HTTP static server and WebSocket-to-TCP gateway
 - `voxygen/` - native graphical client
 - `common/` - shared game data, networking, ECS, and utilities
 - `assets/` - game data, localization, audio, models, and metadata
@@ -50,21 +52,22 @@ On Linux:
 The default game server port is `14004/tcp`. Server configuration and save data
 are stored under the Vox World userdata directory.
 
-## Railway Notes
+## Railway Web Deployment
 
 For Railway deployment, keep the root directory set to `/` so Cargo can see the
-full workspace and assets.
+full workspace and assets. This branch includes `railway.toml`, which builds the
+native server, the web gateway, and the WASM browser shell.
 
-Recommended build command:
+Railway will use:
 
 ```sh
-cargo build --release -p voxworld-server-cli --locked
+bash scripts/railway-build.sh
 ```
 
-Recommended start command:
+and then:
 
 ```sh
-./target/release/voxworld-server-cli --non-interactive --no-auth
+bash scripts/railway-start.sh
 ```
 
 Recommended variables:
@@ -74,10 +77,17 @@ RUST_LOG=info,common::net=info
 RAILPACK_RUST_VERSION=nightly-2025-09-08
 RAILPACK_BUILD_APT_PACKAGES=mold
 VOXWORLD_USERDATA=/data/userdata
+VELOREN_GIT_VERSION=/0/0
 ```
 
 Use a persistent Railway volume mounted at `/data` if you want server state,
 configuration, and player data to survive redeploys.
+
+The public Railway HTTP domain serves the browser client and upgrades `/ws`
+connections to the web gateway. The gateway forwards browser traffic to the
+native game server on `127.0.0.1:14004`.
+
+The server default player cap is 100.
 
 ## License
 

@@ -75,6 +75,9 @@ nix/result*
 ## Rust
 target
 
+## WASM web client build output
+web-client/web/pkg/
+
 
 # Shell extensions
 ## direnv

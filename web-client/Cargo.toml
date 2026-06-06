@@ -1,0 +1,38 @@
+[package]
+name = "voxworld-web-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+console_error_panic_hook = "0.1"
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "BinaryType",
+    "CanvasRenderingContext2d",
+    "CloseEvent",
+    "CssStyleDeclaration",
+    "Document",
+    "Element",
+    "ErrorEvent",
+    "Event",
+    "HtmlButtonElement",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlInputElement",
+    "MessageEvent",
+    "WebSocket",
+    "Window",
+    "console",
+]

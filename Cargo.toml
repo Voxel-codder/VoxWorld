@@ -20,6 +20,8 @@ members = [
     "server",
     "server/agent",
     "server-cli",
+    "web-client",
+    "web-gateway",
     "voxygen",
     "voxygen/anim",
     "voxygen/egui",

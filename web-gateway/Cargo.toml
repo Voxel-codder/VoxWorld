@@ -1,0 +1,23 @@
+[package]
+name = "voxworld-web-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true }
+futures-util = { workspace = true, features = ["sink", "std"] }
+tokio = { workspace = true, features = [
+    "fs",
+    "io-util",
+    "macros",
+    "net",
+    "rt-multi-thread",
+] }
+tokio-tungstenite = "0.28"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }

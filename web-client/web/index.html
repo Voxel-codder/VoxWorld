@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vox World Web Client</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <canvas id="world-canvas" aria-label="Vox World web client canvas"></canvas>
+
+    <form class="connection-panel" onsubmit="return false">
+      <label for="server-url">Server</label>
+      <div class="connection-row">
+        <input id="server-url" autocomplete="off" spellcheck="false" />
+        <button id="connect-button" type="button">Connect</button>
+      </div>
+      <p id="connection-status">Not connected</p>
+    </form>
+
+    <script type="module">
+      import init from "./pkg/voxworld_web_client.js";
+
+      const serverUrl = document.getElementById("server-url");
+      if (serverUrl) {
+        const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+        serverUrl.value = `${scheme}://${window.location.host}/ws`;
+      }
+
+      init().then(() => {
+        document.getElementById("connect-button")?.click();
+      }).catch((error) => {
+        console.error(error);
+        const status = document.getElementById("connection-status");
+        if (status) {
+          status.textContent = "WASM failed to start";
+        }
+      });
+    </script>
+  </body>
+</html>
