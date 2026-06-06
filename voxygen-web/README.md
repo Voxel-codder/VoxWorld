@@ -77,6 +77,10 @@ Current milestone:
 - open a browser-side trade panel when `E`/`Enter` targets a trader or market
   board, showing the selected town, site stock, representative wares, quality,
   and buy/sell coin prices from the original economy path;
+- track a browser-side pending-trade preview state with Mutate, Review, and
+  Complete phases, selected merchant wares, a player coin offer, and buy/sell
+  balance text so the web trade flow mirrors the shape of Voxygen's
+  `PendingTrade` flow before server-authoritative actions are attached;
 - preserve original `EntityInfo.body` categories in the web preview and render
   body-aware temporary silhouettes for humanoid, quadruped, flyer, fish, large,
   and object entities;
@@ -94,8 +98,8 @@ Next milestones:
 - replace the temporary rtsim-style profession roster markers with direct
   original rtsim NPC agents, profession inventories, dialogue, and loaded-agent
   state;
-- replace the browser-side trade preview panel with the real Voxygen trade HUD,
-  pending-trade state, inventory slots, and server-authoritative trade actions;
+- replace the browser-side pending-trade preview panel with the real Voxygen
+  trade HUD, inventory slots, and server-authoritative trade actions;
 - replace the visible 5x5 GPU chunk-buffer set with fully streamed loading,
   eviction, and independent chunk draw management around the live player
   position;

@@ -16,8 +16,12 @@ const DETAIL_ID: &str = "voxworld-detail";
 const STATUS_ID: &str = "voxworld-status";
 const TRADE_PANEL_ID: &str = "voxworld-trade-panel";
 const TRADE_TITLE_ID: &str = "voxworld-trade-title";
+const TRADE_PHASE_ID: &str = "voxworld-trade-phase";
 const TRADE_STOCK_ID: &str = "voxworld-trade-stock";
 const TRADE_WARES_ID: &str = "voxworld-trade-wares";
+const TRADE_MERCHANT_OFFER_ID: &str = "voxworld-trade-merchant-offer";
+const TRADE_PLAYER_OFFER_ID: &str = "voxworld-trade-player-offer";
+const TRADE_BALANCE_ID: &str = "voxworld-trade-balance";
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 const PLAYER_SPEED_BLOCKS_PER_SECOND: f32 = 14.0;
 const MAX_FRAME_DELTA_SECONDS: f32 = 0.05;
@@ -122,6 +126,7 @@ struct VoxygenWebClient {
     world_preview: OriginalWorldPreview,
     world_mesh: OriginalWorldMesh,
     player: PlayerState,
+    active_trade: Option<PreviewTradeSession>,
     keydown_listener: Option<Closure<dyn FnMut(KeyboardEvent)>>,
     keyup_listener: Option<Closure<dyn FnMut(KeyboardEvent)>>,
 }
@@ -189,6 +194,10 @@ struct InputState {
     left: bool,
     right: bool,
     interact_requested: bool,
+    trade_accept_requested: bool,
+    trade_clear_requested: bool,
+    trade_close_requested: bool,
+    trade_select_requested: Option<usize>,
 }
 
 impl InputState {
@@ -198,9 +207,30 @@ impl InputState {
             "ArrowDown" | "s" | "S" => self.backward = pressed,
             "ArrowLeft" | "a" | "A" => self.left = pressed,
             "ArrowRight" | "d" | "D" => self.right = pressed,
-            "e" | "E" | "Enter" => {
+            "e" | "E" => {
                 if pressed {
                     self.interact_requested = true;
+                }
+            },
+            "Enter" => {
+                if pressed {
+                    self.trade_accept_requested = true;
+                }
+            },
+            "Escape" => {
+                if pressed {
+                    self.trade_close_requested = true;
+                }
+            },
+            "c" | "C" => {
+                if pressed {
+                    self.trade_clear_requested = true;
+                }
+            },
+            "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => {
+                if pressed {
+                    self.trade_select_requested =
+                        key.parse::<usize>().ok().and_then(|n| n.checked_sub(1));
                 }
             },
             _ => return false,
@@ -214,6 +244,19 @@ impl InputState {
         requested
     }
 
+    fn consume_trade_input(&mut self) -> TradeInput {
+        let input = TradeInput {
+            accept_requested: self.trade_accept_requested,
+            clear_requested: self.trade_clear_requested,
+            close_requested: self.trade_close_requested,
+            select_requested: self.trade_select_requested.take(),
+        };
+        self.trade_accept_requested = false;
+        self.trade_clear_requested = false;
+        self.trade_close_requested = false;
+        input
+    }
+
     fn direction(&self) -> Option<Vec2<f32>> {
         let forward_axis = i32::from(self.forward) - i32::from(self.backward);
         let right_axis = i32::from(self.right) - i32::from(self.left);
@@ -224,6 +267,109 @@ impl InputState {
         Some(normalize2(
             camera_forward_world() * forward_axis as f32 + camera_right_world() * right_axis as f32,
         ))
+    }
+}
+
+#[derive(Default)]
+struct TradeInput {
+    accept_requested: bool,
+    clear_requested: bool,
+    close_requested: bool,
+    select_requested: Option<usize>,
+}
+
+impl TradeInput {
+    fn any(&self) -> bool {
+        self.accept_requested
+            || self.clear_requested
+            || self.close_requested
+            || self.select_requested.is_some()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PreviewTradePhase {
+    Mutate,
+    Review,
+    Complete,
+}
+
+impl PreviewTradePhase {
+    fn label(self) -> &'static str {
+        match self {
+            PreviewTradePhase::Mutate => "Mutate",
+            PreviewTradePhase::Review => "Review",
+            PreviewTradePhase::Complete => "Complete",
+        }
+    }
+}
+
+struct PreviewTradeSession {
+    panel: TradePanelPreview,
+    phase: PreviewTradePhase,
+    selected_wares: Vec<usize>,
+}
+
+impl PreviewTradeSession {
+    fn new(panel: TradePanelPreview) -> Self {
+        Self {
+            panel,
+            phase: PreviewTradePhase::Mutate,
+            selected_wares: Vec::new(),
+        }
+    }
+
+    fn select_ware(&mut self, index: usize) {
+        if self.phase != PreviewTradePhase::Mutate || index >= self.panel.wares.len() {
+            return;
+        }
+        if let Some(existing) = self.selected_wares.iter().position(|ware| *ware == index) {
+            self.selected_wares.remove(existing);
+        } else {
+            self.selected_wares.push(index);
+            self.selected_wares.sort_unstable();
+        }
+    }
+
+    fn clear_offer(&mut self) {
+        self.selected_wares.clear();
+        self.phase = PreviewTradePhase::Mutate;
+    }
+
+    fn accept(&mut self) {
+        match self.phase {
+            PreviewTradePhase::Mutate if !self.selected_wares.is_empty() => {
+                self.phase = PreviewTradePhase::Review;
+            },
+            PreviewTradePhase::Review => {
+                self.phase = PreviewTradePhase::Complete;
+            },
+            PreviewTradePhase::Mutate | PreviewTradePhase::Complete => {},
+        }
+    }
+
+    fn player_coin_offer(&self) -> f32 {
+        self.selected_wares
+            .iter()
+            .filter_map(|index| self.panel.wares.get(*index))
+            .map(|ware| ware.buy_coins)
+            .sum()
+    }
+
+    fn merchant_sell_value(&self) -> f32 {
+        self.selected_wares
+            .iter()
+            .filter_map(|index| self.panel.wares.get(*index))
+            .map(|ware| ware.sell_coins)
+            .sum()
+    }
+
+    fn selected_ware_names(&self) -> Vec<String> {
+        self.selected_wares
+            .iter()
+            .filter_map(|index| self.panel.wares.get(*index))
+            .map(|ware| ware.name.clone())
+            .collect()
     }
 }
 
@@ -362,6 +508,7 @@ impl VoxygenWebClient {
             world_preview,
             world_mesh,
             player,
+            active_trade: None,
             keydown_listener: None,
             keyup_listener: None,
         })
@@ -520,11 +667,16 @@ impl VoxygenWebClient {
     fn tick(&mut self, timestamp_ms: f64) -> Result<(), String> {
         let dt = self.player.frame_delta(timestamp_ms);
         let interact_requested = self.player.input.consume_interact_request();
+        let mut trade_input = self.player.input.consume_trade_input();
         let direction = self.player.input.direction();
-        if direction.is_none() && !interact_requested {
+        let enter_as_interact = trade_input.accept_requested && self.active_trade.is_none();
+        if enter_as_interact {
+            trade_input.accept_requested = false;
+        }
+        if direction.is_none() && !interact_requested && !enter_as_interact && !trade_input.any() {
             return Ok(());
         }
-        if dt <= 0.0 && !interact_requested {
+        if dt <= 0.0 && !interact_requested && !enter_as_interact && !trade_input.any() {
             return Ok(());
         }
 
@@ -556,10 +708,17 @@ impl VoxygenWebClient {
             }
         }
 
-        if interact_requested {
+        let mut refresh_trade_panel = self.apply_trade_input(trade_input);
+
+        if interact_requested || enter_as_interact {
             let interaction = self.world_preview.interaction_attempt(self.player.wpos);
-            set_trade_panel(interaction.trade_panel.as_ref());
+            self.active_trade = interaction.trade_panel.map(PreviewTradeSession::new);
+            refresh_trade_panel = true;
             self.player.last_interaction = Some(interaction.summary);
+        }
+
+        if refresh_trade_panel {
+            set_trade_panel(self.active_trade.as_ref());
         }
 
         self.update_camera();
@@ -568,6 +727,32 @@ impl VoxygenWebClient {
         set_status("Original WorldSim terrain is rendering.", StatusState::Ok);
         set_detail(&self.scene_summary());
         Ok(())
+    }
+
+    fn apply_trade_input(&mut self, input: TradeInput) -> bool {
+        if input.close_requested {
+            self.active_trade = None;
+            return true;
+        }
+
+        let Some(session) = self.active_trade.as_mut() else {
+            return false;
+        };
+
+        if input.clear_requested {
+            session.clear_offer();
+            return true;
+        }
+        if let Some(index) = input.select_requested {
+            session.select_ware(index);
+            return true;
+        }
+        if input.accept_requested {
+            session.accept();
+            return true;
+        }
+
+        false
     }
 
     fn resolve_player_movement(&self, proposed_wpos: Vec2<f32>) -> (Vec2<f32>, bool) {
@@ -1409,7 +1594,7 @@ fn set_detail(message: &str) {
     }
 }
 
-fn set_trade_panel(panel: Option<&TradePanelPreview>) {
+fn set_trade_panel(session: Option<&PreviewTradeSession>) {
     let Some(document) = web_sys::window().and_then(|window| window.document()) else {
         return;
     };
@@ -1417,14 +1602,18 @@ fn set_trade_panel(panel: Option<&TradePanelPreview>) {
         return;
     };
 
-    let Some(panel) = panel else {
+    let Some(session) = session else {
         container.set_class_name("trade-panel trade-panel-hidden");
         return;
     };
+    let panel = &session.panel;
 
     container.set_class_name("trade-panel");
     if let Some(title) = document.get_element_by_id(TRADE_TITLE_ID) {
         title.set_text_content(Some(&panel.title));
+    }
+    if let Some(phase) = document.get_element_by_id(TRADE_PHASE_ID) {
+        phase.set_text_content(Some(session.phase.label()));
     }
     if let Some(stock) = document.get_element_by_id(TRADE_STOCK_ID) {
         stock.set_inner_html("");
@@ -1441,10 +1630,56 @@ fn set_trade_panel(panel: Option<&TradePanelPreview>) {
         if panel.wares.is_empty() {
             append_text_element(&document, &wares, "div", "ware-row", "No priced wares");
         } else {
-            for ware in &panel.wares {
-                append_ware_row(&document, &wares, ware);
+            for (index, ware) in panel.wares.iter().enumerate() {
+                append_ware_row(
+                    &document,
+                    &wares,
+                    index,
+                    ware,
+                    session.selected_wares.contains(&index),
+                );
             }
         }
+    }
+    if let Some(merchant_offer) = document.get_element_by_id(TRADE_MERCHANT_OFFER_ID) {
+        merchant_offer.set_inner_html("");
+        let names = session.selected_ware_names();
+        if names.is_empty() {
+            append_text_element(
+                &document,
+                &merchant_offer,
+                "div",
+                "offer-row offer-row-empty",
+                "No merchant offer",
+            );
+        } else {
+            for name in names {
+                append_text_element(&document, &merchant_offer, "div", "offer-row", &name);
+            }
+        }
+    }
+    if let Some(player_offer) = document.get_element_by_id(TRADE_PLAYER_OFFER_ID) {
+        player_offer.set_inner_html("");
+        if session.selected_wares.is_empty() {
+            append_text_element(
+                &document,
+                &player_offer,
+                "div",
+                "offer-row offer-row-empty",
+                "No player offer",
+            );
+        } else {
+            append_text_element(
+                &document,
+                &player_offer,
+                "div",
+                "offer-row",
+                &format!("coins {}", format_coin_amount(session.player_coin_offer())),
+            );
+        }
+    }
+    if let Some(balance) = document.get_element_by_id(TRADE_BALANCE_ID) {
+        balance.set_text_content(Some(&trade_balance_summary(session)));
     }
 }
 
@@ -1462,11 +1697,29 @@ fn append_text_element(
     }
 }
 
-fn append_ware_row(document: &Document, parent: &Element, ware: &world_preview::TradePanelWare) {
+fn append_ware_row(
+    document: &Document,
+    parent: &Element,
+    index: usize,
+    ware: &world_preview::TradePanelWare,
+    selected: bool,
+) {
     let Ok(row) = document.create_element("div") else {
         return;
     };
-    row.set_class_name("ware-row");
+    row.set_class_name(if selected {
+        "ware-row ware-row-selected"
+    } else {
+        "ware-row"
+    });
+
+    append_text_element(
+        document,
+        &row,
+        "div",
+        "ware-shortcut",
+        &(index + 1).to_string(),
+    );
 
     if let Ok(name_cell) = document.create_element("div") {
         name_cell.set_class_name("ware-name");
@@ -1488,4 +1741,40 @@ fn append_price_cell(document: &Document, parent: &Element, label: &str, value: 
     append_text_element(document, &cell, "span", "ware-price-label", label);
     append_text_element(document, &cell, "strong", "ware-price-value", value);
     let _ = parent.append_child(&cell);
+}
+
+fn trade_balance_summary(session: &PreviewTradeSession) -> String {
+    match session.phase {
+        PreviewTradePhase::Mutate if session.selected_wares.is_empty() => {
+            "No offer selected".to_owned()
+        },
+        PreviewTradePhase::Mutate => format!(
+            "Offer mutating: player pays {} for {} item(s), merchant sell value {}",
+            format_coin_amount(session.player_coin_offer()),
+            session.selected_wares.len(),
+            format_coin_amount(session.merchant_sell_value())
+        ),
+        PreviewTradePhase::Review => format!(
+            "Reviewing: player pays {} for {} item(s), merchant sell value {}",
+            format_coin_amount(session.player_coin_offer()),
+            session.selected_wares.len(),
+            format_coin_amount(session.merchant_sell_value())
+        ),
+        PreviewTradePhase::Complete => format!(
+            "Preview complete: {} item(s) for {}, merchant sell value {}",
+            session.selected_wares.len(),
+            format_coin_amount(session.player_coin_offer()),
+            format_coin_amount(session.merchant_sell_value())
+        ),
+    }
+}
+
+fn format_coin_amount(value: f32) -> String {
+    if value >= 100.0 {
+        format!("{value:.0}c")
+    } else if value >= 10.0 {
+        format!("{value:.1}c")
+    } else {
+        format!("{value:.2}c")
+    }
 }

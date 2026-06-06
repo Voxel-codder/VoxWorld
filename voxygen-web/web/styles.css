@@ -163,12 +163,29 @@ body {
 
 .ware-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: center;
   padding: 8px 9px;
   background: rgba(255, 255, 255, 0.07);
   border: 1px solid rgba(255, 255, 255, 0.11);
+}
+
+.ware-row-selected {
+  border-color: rgba(255, 218, 127, 0.58);
+  background: rgba(186, 126, 36, 0.22);
+}
+
+.ware-shortcut {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: #0d1218;
+  background: #ffe59c;
+  font-size: 12px;
+  font-weight: 900;
 }
 
 .ware-name {
@@ -211,6 +228,45 @@ body {
   font-weight: 780;
 }
 
+.trade-offers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.offer-list {
+  display: grid;
+  gap: 6px;
+  min-height: 31px;
+}
+
+.offer-row {
+  padding: 7px 8px;
+  color: #edf7ff;
+  background: rgba(66, 91, 111, 0.22);
+  border: 1px solid rgba(185, 220, 241, 0.14);
+  font-size: 12px;
+  font-weight: 740;
+  line-height: 1.25;
+}
+
+.offer-row-empty {
+  color: #94afbf;
+  font-weight: 680;
+}
+
+.trade-balance {
+  margin-top: 12px;
+  padding: 8px 9px;
+  color: #dffdf5;
+  background: rgba(24, 150, 124, 0.18);
+  border: 1px solid rgba(99, 242, 204, 0.28);
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1.35;
+}
+
 @media (max-width: 520px) {
   .boot-panel {
     left: 12px;
@@ -233,10 +289,14 @@ body {
   }
 
   .ware-row {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
   .ware-price:last-child {
-    grid-column: 2;
+    grid-column: 3;
+  }
+
+  .trade-offers {
+    grid-template-columns: 1fr;
   }
 }

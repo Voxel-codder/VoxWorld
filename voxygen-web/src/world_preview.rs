@@ -91,17 +91,21 @@ pub struct InteractionAttempt {
     pub trade_panel: Option<TradePanelPreview>,
 }
 
+#[derive(Clone)]
 pub struct TradePanelPreview {
     pub title: String,
     pub stock: Vec<String>,
     pub wares: Vec<TradePanelWare>,
 }
 
+#[derive(Clone)]
 pub struct TradePanelWare {
     pub name: String,
     pub quality: String,
     pub buy: String,
     pub sell: String,
+    pub buy_coins: f32,
+    pub sell_coins: f32,
 }
 
 pub struct OriginalTerrainChunkMesh {
@@ -228,6 +232,8 @@ impl TradePreviewItem {
             quality: format!("{:?}", self.quality),
             buy: format!("{}c", format_coin_price(self.buy_coins)),
             sell: format!("{}c", format_coin_price(self.sell_coins)),
+            buy_coins: self.buy_coins,
+            sell_coins: self.sell_coins,
         }
     }
 }
