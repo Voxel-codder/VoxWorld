@@ -13,7 +13,7 @@ use veloren_world::{
     config::Features,
     index::{IndexOwned, IndexRef},
     sim::{FileOpts, GenOpts, WorldOpts},
-    site::SiteKind,
+    site::{PlotKind, SiteKind, plot::PlotKindMeta},
 };
 
 pub const FLOATS_PER_VERTEX: usize = 6;
@@ -36,6 +36,7 @@ pub struct OriginalWorldPreview {
     original_settlements: usize,
     original_pois: usize,
     start: PreviewStartLocation,
+    site_markers: Vec<OriginalSiteMarker>,
     seed: u32,
 }
 
@@ -61,6 +62,9 @@ pub struct OriginalWorldMesh {
     pub original_sites: usize,
     pub original_settlements: usize,
     pub original_pois: usize,
+    pub site_npc_markers: usize,
+    pub site_trader_markers: usize,
+    pub site_market_markers: usize,
     pub seed: u32,
 }
 
@@ -94,6 +98,22 @@ struct PreviewStartLocation {
     center_chunk_pos: Vec2<i32>,
     player_wpos: Vec2<f32>,
     summary: String,
+}
+
+struct OriginalSiteMarker {
+    wpos: Vec3<f32>,
+    kind: OriginalSiteMarkerKind,
+    label: &'static str,
+    site_name: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OriginalSiteMarkerKind {
+    Villager,
+    Trader,
+    Guard,
+    Captain,
+    Market,
 }
 
 impl OriginalWorldPreview {
@@ -130,6 +150,7 @@ impl OriginalWorldPreview {
             original_settlements,
             original_pois,
             start,
+            site_markers,
         ) = {
             let index_ref = index_owned.as_index_ref();
             (
@@ -145,6 +166,7 @@ impl OriginalWorldPreview {
                     .count(),
                 world.civs().pois.values().len(),
                 select_preview_start(&world, index_ref, dimensions),
+                collect_site_markers(&world, index_ref),
             )
         };
 
@@ -160,6 +182,7 @@ impl OriginalWorldPreview {
             original_settlements,
             original_pois,
             start,
+            site_markers,
             seed: SEED,
         })
     }
@@ -270,12 +293,13 @@ impl OriginalWorldPreview {
             self.original_sites,
             self.original_settlements,
             self.original_pois,
+            &self.site_markers,
         )
     }
 
     pub fn interaction_summary(&self, player_wpos: Vec2<f32>) -> String {
         let terrain_prop = self.nearest_terrain_prop(player_wpos, 96.0);
-        let entity = self.nearest_entity(player_wpos, 96.0);
+        let entity = self.nearest_entity_target(player_wpos, 96.0);
         format!(
             " Nearest terrain target: {}. Nearest entity target: {}.",
             terrain_prop
@@ -289,9 +313,9 @@ impl OriginalWorldPreview {
 
     pub fn interaction_attempt_summary(&self, player_wpos: Vec2<f32>) -> String {
         let terrain_prop = self.nearest_terrain_prop(player_wpos, TERRAIN_INTERACTION_RANGE_BLOCKS);
-        let entity = self.nearest_entity(player_wpos, ENTITY_INTERACTION_RANGE_BLOCKS);
+        let entity = self.nearest_entity_target(player_wpos, ENTITY_INTERACTION_RANGE_BLOCKS);
         let interaction = match (terrain_prop, entity) {
-            (Some(terrain_prop), Some(entity)) if terrain_prop.distance <= entity.distance => {
+            (Some(terrain_prop), Some(entity)) if terrain_prop.distance <= entity.distance() => {
                 terrain_prop.action_summary()
             },
             (Some(_), Some(entity)) => entity.action_summary(),
@@ -398,6 +422,74 @@ fn select_preview_start(
             chunk_key(candidate.center_chunk_pos)
         ),
     }
+}
+
+fn collect_site_markers(world: &World, index: IndexRef) -> Vec<OriginalSiteMarker> {
+    world
+        .civs()
+        .sites
+        .values()
+        .filter_map(|civ_site| civ_site.site_tmp)
+        .flat_map(|site_id| {
+            let site = &index.sites[site_id];
+            let site_name = site.name().unwrap_or("unnamed site").to_owned();
+            site.plots().filter_map(move |plot| {
+                let (kind, label, tile) = marker_from_site_plot(plot)?;
+                let wpos2d = site.tile_center_wpos(tile);
+                Some(OriginalSiteMarker {
+                    wpos: wpos2d.as_().with_z(
+                        world
+                            .sim()
+                            .get_alt_approx(wpos2d)
+                            .unwrap_or_else(|| world.sim().get_surface_alt_approx(wpos2d))
+                            + 1.0,
+                    ),
+                    kind,
+                    label,
+                    site_name: site_name.clone(),
+                })
+            })
+        })
+        .collect()
+}
+
+fn marker_from_site_plot(
+    plot: &veloren_world::site::Plot,
+) -> Option<(OriginalSiteMarkerKind, &'static str, Vec2<i32>)> {
+    let fallback_tile = plot.root_tile();
+    let marker = match plot.kind() {
+        PlotKind::AirshipDock(_)
+        | PlotKind::CoastalAirshipDock(_)
+        | PlotKind::CliffTownAirshipDock(_)
+        | PlotKind::DesertCityAirshipDock(_)
+        | PlotKind::SavannahAirshipDock(_) => (OriginalSiteMarkerKind::Captain, "airship dock"),
+        PlotKind::Workshop(_)
+        | PlotKind::CoastalWorkshop(_)
+        | PlotKind::SavannahWorkshop(_)
+        | PlotKind::DesertCityMultiPlot(_) => (OriginalSiteMarkerKind::Trader, "workshop"),
+        PlotKind::Tavern(_) => (OriginalSiteMarkerKind::Trader, "tavern"),
+        PlotKind::Plaza(_) => (OriginalSiteMarkerKind::Market, "board"),
+        PlotKind::Castle(_) | PlotKind::CliffTower(_) | PlotKind::SavannahGuardHut(_) => {
+            (OriginalSiteMarkerKind::Guard, "post")
+        },
+        PlotKind::House(_)
+        | PlotKind::CoastalHouse(_)
+        | PlotKind::DesertCityTemple(_)
+        | PlotKind::SavannahHut(_)
+        | PlotKind::TerracottaHouse(_)
+        | PlotKind::MyrmidonHouse(_) => (OriginalSiteMarkerKind::Villager, "home"),
+        _ => return None,
+    };
+
+    let tile = match plot.meta() {
+        Some(PlotKindMeta::AirshipDock { door_tile, .. })
+        | Some(PlotKindMeta::House { door_tile })
+        | Some(PlotKindMeta::Other { door_tile }) => door_tile,
+        Some(PlotKindMeta::Workshop { door_tile }) => door_tile.unwrap_or(fallback_tile),
+        Some(PlotKindMeta::Dungeon) | None => fallback_tile,
+    };
+
+    Some((marker.0, marker.1, tile))
 }
 
 struct PreviewStartCandidate {
@@ -509,6 +601,47 @@ impl OriginalWorldPreview {
                 entity,
                 distance: distance_squared.sqrt(),
             })
+    }
+
+    fn nearest_site_marker(
+        &self,
+        player_wpos: Vec2<f32>,
+        radius_blocks: f32,
+    ) -> Option<SiteMarkerFocus<'_>> {
+        let radius_squared = radius_blocks * radius_blocks;
+        self.site_markers
+            .iter()
+            .filter_map(|marker| {
+                let marker_wpos = marker.wpos.xy();
+                let distance_squared = vec2_distance_squared(player_wpos, marker_wpos);
+                (distance_squared <= radius_squared).then_some((marker, distance_squared))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(marker, distance_squared)| SiteMarkerFocus {
+                marker,
+                distance: distance_squared.sqrt(),
+            })
+    }
+
+    fn nearest_entity_target(
+        &self,
+        player_wpos: Vec2<f32>,
+        radius_blocks: f32,
+    ) -> Option<EntityTargetFocus<'_>> {
+        let spawned = self
+            .nearest_entity(player_wpos, radius_blocks)
+            .map(EntityTargetFocus::Generated);
+        let site = self
+            .nearest_site_marker(player_wpos, radius_blocks)
+            .map(EntityTargetFocus::Site);
+
+        match (spawned, site) {
+            (Some(spawned), Some(site)) if spawned.distance() <= site.distance() => Some(spawned),
+            (Some(_), Some(site)) => Some(site),
+            (Some(spawned), None) => Some(spawned),
+            (None, Some(site)) => Some(site),
+            (None, None) => None,
+        }
     }
 }
 
@@ -626,6 +759,60 @@ impl EntityFocus<'_> {
     }
 }
 
+struct SiteMarkerFocus<'a> {
+    marker: &'a OriginalSiteMarker,
+    distance: f32,
+}
+
+impl SiteMarkerFocus<'_> {
+    fn summary(&self) -> String {
+        format!(
+            "{} {} in {} at {:.1}m",
+            site_marker_role_label(self.marker.kind),
+            self.marker.label,
+            self.marker.site_name,
+            self.distance
+        )
+    }
+
+    fn action_summary(&self) -> String {
+        let verb = match self.marker.kind {
+            OriginalSiteMarkerKind::Trader | OriginalSiteMarkerKind::Market => "open trade preview",
+            OriginalSiteMarkerKind::Captain | OriginalSiteMarkerKind::Villager => "talk preview",
+            OriginalSiteMarkerKind::Guard => "talk guard",
+        };
+        format!("{verb} {}", self.summary())
+    }
+}
+
+enum EntityTargetFocus<'a> {
+    Generated(EntityFocus<'a>),
+    Site(SiteMarkerFocus<'a>),
+}
+
+impl EntityTargetFocus<'_> {
+    fn distance(&self) -> f32 {
+        match self {
+            EntityTargetFocus::Generated(focus) => focus.distance,
+            EntityTargetFocus::Site(focus) => focus.distance,
+        }
+    }
+
+    fn summary(&self) -> String {
+        match self {
+            EntityTargetFocus::Generated(focus) => focus.summary(),
+            EntityTargetFocus::Site(focus) => focus.summary(),
+        }
+    }
+
+    fn action_summary(&self) -> String {
+        match self {
+            EntityTargetFocus::Generated(focus) => focus.action_summary(),
+            EntityTargetFocus::Site(focus) => focus.action_summary(),
+        }
+    }
+}
+
 fn mesh_from_terrain_chunks(
     chunks: &[&GeneratedPreviewChunk],
     dimensions: Vec2<u32>,
@@ -639,6 +826,7 @@ fn mesh_from_terrain_chunks(
     original_sites: usize,
     original_settlements: usize,
     original_pois: usize,
+    site_markers: &[OriginalSiteMarker],
 ) -> Result<OriginalWorldMesh, String> {
     if chunks.is_empty() {
         return Err("original WorldSim generated no preview chunks".to_owned());
@@ -691,6 +879,14 @@ fn mesh_from_terrain_chunks(
         terrain_sprite_props += preview_chunk.mesh.sprite_props;
     }
 
+    let (site_npc_markers, site_trader_markers, site_market_markers) = append_site_markers(
+        site_markers,
+        center_chunk_pos,
+        chunk_radius,
+        vertical_origin,
+        &mut entity_markers,
+    );
+
     if builder.indices.is_empty() {
         return Err(format!(
             "original TerrainChunk patch around {center_chunk_pos:?} produced no visible block \
@@ -721,8 +917,51 @@ fn mesh_from_terrain_chunks(
         original_sites,
         original_settlements,
         original_pois,
+        site_npc_markers,
+        site_trader_markers,
+        site_market_markers,
         seed,
     })
+}
+
+fn append_site_markers(
+    site_markers: &[OriginalSiteMarker],
+    center_chunk_pos: Vec2<i32>,
+    chunk_radius: i32,
+    vertical_origin: f32,
+    entity_markers: &mut Vec<OriginalEntityMarker>,
+) -> (usize, usize, usize) {
+    let rect_size = TerrainChunkSize::RECT_SIZE.as_::<f32>();
+    let min_chunk = center_chunk_pos - Vec2::broadcast(chunk_radius);
+    let max_chunk = center_chunk_pos + Vec2::broadcast(chunk_radius + 1);
+    let min_wpos = min_chunk.as_::<f32>() * rect_size;
+    let max_wpos = max_chunk.as_::<f32>() * rect_size;
+    let mut npc_count = 0usize;
+    let mut trader_count = 0usize;
+    let mut market_count = 0usize;
+
+    for marker in site_markers {
+        if marker.wpos.x < min_wpos.x
+            || marker.wpos.y < min_wpos.y
+            || marker.wpos.x >= max_wpos.x
+            || marker.wpos.y >= max_wpos.y
+        {
+            continue;
+        }
+
+        match marker.kind {
+            OriginalSiteMarkerKind::Trader | OriginalSiteMarkerKind::Captain => trader_count += 1,
+            OriginalSiteMarkerKind::Market => market_count += 1,
+            OriginalSiteMarkerKind::Villager | OriginalSiteMarkerKind::Guard => npc_count += 1,
+        }
+        entity_markers.push(site_marker_to_entity_marker(
+            marker,
+            center_chunk_pos,
+            vertical_origin,
+        ));
+    }
+
+    (npc_count, trader_count, market_count)
 }
 
 fn count_entity_spawns(entity_spawns: &[EntitySpawn]) -> usize {
@@ -803,6 +1042,16 @@ fn entity_role_label(entity: &EntityInfo) -> &'static str {
         }
     } else {
         "static"
+    }
+}
+
+fn site_marker_role_label(kind: OriginalSiteMarkerKind) -> &'static str {
+    match kind {
+        OriginalSiteMarkerKind::Trader => "trader",
+        OriginalSiteMarkerKind::Market => "market",
+        OriginalSiteMarkerKind::Captain => "captain",
+        OriginalSiteMarkerKind::Guard => "guard",
+        OriginalSiteMarkerKind::Villager => "npc",
     }
 }
 
@@ -911,6 +1160,42 @@ fn entity_marker(
         color: entity_marker_color(entity),
         shape,
         yaw_radians: 0.0,
+    }
+}
+
+fn site_marker_to_entity_marker(
+    marker: &OriginalSiteMarker,
+    center_chunk_pos: Vec2<i32>,
+    vertical_origin: f32,
+) -> OriginalEntityMarker {
+    let center = chunk_center_wpos(center_chunk_pos);
+    let render_pos = [
+        (marker.wpos.x - center.x) * TERRAIN_HORIZONTAL_SCALE,
+        (marker.wpos.z - vertical_origin) * 0.28 + 0.25,
+        (marker.wpos.y - center.y) * TERRAIN_HORIZONTAL_SCALE,
+    ];
+    let (radius, height, shape) = match marker.kind {
+        OriginalSiteMarkerKind::Market => (0.42, 0.7, OriginalEntityMarkerShape::Object),
+        OriginalSiteMarkerKind::Guard => (0.38, 1.55, OriginalEntityMarkerShape::Humanoid),
+        _ => (0.34, 1.45, OriginalEntityMarkerShape::Humanoid),
+    };
+    OriginalEntityMarker {
+        render_pos,
+        radius,
+        height,
+        color: site_marker_color(marker.kind),
+        shape,
+        yaw_radians: 0.0,
+    }
+}
+
+fn site_marker_color(kind: OriginalSiteMarkerKind) -> [f32; 3] {
+    match kind {
+        OriginalSiteMarkerKind::Trader => [1.0, 0.78, 0.18],
+        OriginalSiteMarkerKind::Market => [1.0, 0.62, 0.14],
+        OriginalSiteMarkerKind::Captain => [0.38, 0.78, 1.0],
+        OriginalSiteMarkerKind::Guard => [0.92, 0.28, 0.28],
+        OriginalSiteMarkerKind::Villager => [0.24, 0.48, 1.0],
     }
 }
 

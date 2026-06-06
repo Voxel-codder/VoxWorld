@@ -640,8 +640,9 @@ impl VoxygenWebClient {
              update: {}/{}. Chunk/mesh cache: {}/{}. GPU chunk buffers: {}/{}. Player block \
              position: ({:.1}, {:.1}). Player terrain z: {:.1}. Player facing: {:.0} deg. Blocked \
              terrain moves: {}. WebGPU block faces: {}. Filled blocks: {}. Liquid blocks: {}. \
-             Terrain sprite props: {}. Visible entity markers: {}. Entity spawns: {}. World \
-             features loaded: {}. Wildlife spawn manifests: {}. {}{}",
+             Terrain sprite props: {}. Visible entity markers: {}. Entity spawns: {}. Site \
+             NPC/trader/market markers: {}/{}/{}. World features loaded: {}. Wildlife spawn \
+             manifests: {}. {}{}",
             self.world_mesh.seed,
             self.world_preview.start_summary(),
             self.world_mesh.generated_chunks,
@@ -670,6 +671,9 @@ impl VoxygenWebClient {
             self.world_mesh.terrain_sprite_props,
             self.world_mesh.entity_markers.len(),
             self.world_mesh.generated_entity_spawns,
+            self.world_mesh.site_npc_markers,
+            self.world_mesh.site_trader_markers,
+            self.world_mesh.site_market_markers,
             self.world_mesh.enabled_world_features,
             self.world_mesh.wildlife_spawn_manifests,
             self.player

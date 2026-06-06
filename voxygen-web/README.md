@@ -60,6 +60,12 @@ Current milestone:
   persistent last-interaction status line;
 - report original site, settlement, POI, and selected starting-site metadata in
   the browser status panel for validation;
+- derive temporary visible NPC, trader, captain, guard, villager, and market
+  board markers from the generated original site plots so starter towns no
+  longer render as empty terrain plus only waypoint supplements;
+- include those site-derived NPC/trader/market markers in nearest-target
+  reporting and `E`/`Enter` interaction previews, including market-board trade
+  preview status text;
 - preserve original `EntityInfo.body` categories in the web preview and render
   body-aware temporary silhouettes for humanoid, quadruped, flyer, fish, large,
   and object entities;
@@ -74,8 +80,11 @@ Next milestones:
   and atlas/material pipeline;
 - replace entity and player temporary silhouettes with Voxygen body meshes,
   loadouts, and animation state;
-- surface original rtsim/site NPCs, traders, and market interaction state in the
-  browser scene instead of only chunk supplement entity spawns;
+- replace the temporary site-derived NPC/trader/market markers with direct
+  original rtsim NPC data, profession inventories, dialogue, and loaded-agent
+  state;
+- connect market-board and trader previews to real inventory/trade UI data
+  instead of status-line-only interaction feedback;
 - replace the visible 5x5 GPU chunk-buffer set with fully streamed loading,
   eviction, and independent chunk draw management around the live player
   position;
