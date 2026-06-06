@@ -90,8 +90,8 @@ async fn handle_connection(
         return serve_http(socket, peer, &static_dir, upstream, query_server).await;
     }
 
-    if is_play_request(&request_head) {
-        return handle_play_connection(socket, peer, upstream).await;
+    if let Some(username) = play_username(&request_head) {
+        return handle_play_connection(socket, peer, upstream, username).await;
     }
 
     info!(%peer, "browser websocket connected");
@@ -151,41 +151,138 @@ fn is_websocket_request(request_head: &str) -> bool {
 }
 
 fn is_raw_proxy_request(request_head: &str) -> bool {
-    let mut lines = request_head.lines();
-    let request_line = lines.next().unwrap_or_default();
-
-    request_line.starts_with("GET /ws ")
-        && request_head
-            .lines()
-            .any(|line| line.eq_ignore_ascii_case("upgrade: websocket"))
+    websocket_target(request_head)
+        .is_some_and(|target| target_path(target) == "/ws" && is_websocket_upgrade(request_head))
 }
 
 fn is_play_request(request_head: &str) -> bool {
-    let mut lines = request_head.lines();
-    let request_line = lines.next().unwrap_or_default();
+    websocket_target(request_head)
+        .is_some_and(|target| target_path(target) == "/play" && is_websocket_upgrade(request_head))
+}
 
-    request_line.starts_with("GET /play ")
-        && request_head
-            .lines()
-            .any(|line| line.eq_ignore_ascii_case("upgrade: websocket"))
+fn is_websocket_upgrade(request_head: &str) -> bool {
+    request_head
+        .lines()
+        .any(|line| line.eq_ignore_ascii_case("upgrade: websocket"))
+}
+
+fn websocket_target(request_head: &str) -> Option<&str> {
+    let request_line = request_head.lines().next()?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next()?;
+    let target = parts.next()?;
+
+    (method == "GET").then_some(target)
+}
+
+fn target_path(target: &str) -> &str {
+    target.split_once('?').map_or(target, |(path, _query)| path)
+}
+
+fn play_username(request_head: &str) -> Option<String> {
+    let target = websocket_target(request_head)?;
+    if target_path(target) != "/play" || !is_websocket_upgrade(request_head) {
+        return None;
+    }
+
+    Some(
+        query_value(target, "name")
+            .and_then(|name| sanitize_username(&name))
+            .unwrap_or_else(next_guest_username),
+    )
+}
+
+fn query_value(target: &str, key: &str) -> Option<String> {
+    let query = target.split_once('?')?.1;
+
+    query.split('&').find_map(|pair| {
+        let (raw_key, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
+        (raw_key == key).then(|| decode_query_value(raw_value))
+    })
+}
+
+fn decode_query_value(value: &str) -> String {
+    let mut decoded = String::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut index = 0;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(' ');
+                index += 1;
+            },
+            b'%' if index + 2 < bytes.len() => {
+                let hex = &value[index + 1..index + 3];
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    decoded.push(char::from(byte));
+                    index += 3;
+                } else {
+                    decoded.push('%');
+                    index += 1;
+                }
+            },
+            byte => {
+                decoded.push(char::from(byte));
+                index += 1;
+            },
+        }
+    }
+
+    decoded
+}
+
+fn sanitize_username(name: &str) -> Option<String> {
+    let mut username = name
+        .chars()
+        .filter_map(|character| {
+            if character.is_ascii_alphanumeric() {
+                Some(character.to_ascii_lowercase())
+            } else if matches!(character, '-' | '_') {
+                Some(character)
+            } else {
+                None
+            }
+        })
+        .take(24)
+        .collect::<String>();
+
+    if username.len() < 3 {
+        return None;
+    }
+
+    if username
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_digit())
+    {
+        username.insert_str(0, "web");
+        username.truncate(24);
+    }
+
+    Some(username)
+}
+
+fn next_guest_username() -> String {
+    static SESSION_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+    format!(
+        "web{:06}",
+        SESSION_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
 }
 
 async fn handle_play_connection(
     socket: TcpStream,
     peer: SocketAddr,
     upstream: SocketAddr,
+    username: String,
 ) -> GatewayResult<()> {
-    static SESSION_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-
-    info!(%peer, "browser play session connected");
+    info!(%peer, %username, "browser play session connected");
 
     let websocket = accept_async(socket).await?;
     let (mut websocket_write, mut websocket_read) = websocket.split();
     let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let username = format!(
-        "web{:06}",
-        SESSION_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    );
     let session = play_session::start(upstream, username, outbound_tx);
 
     let browser_to_session = async {

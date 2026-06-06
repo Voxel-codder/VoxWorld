@@ -8,6 +8,8 @@ For each `/play` WebSocket, the gateway starts a headless native client session,
 auto-creates or loads a character, ticks the client, accepts browser JSON input,
 and sends browser-friendly JSON session messages back to the page. `/ws` remains
 available as a raw WebSocket-to-TCP proxy for lower-level transport experiments.
+Browsers may pass `?name=guest_name` on `/play`; the gateway sanitizes that name
+before using it for the native session.
 
 ## Run
 

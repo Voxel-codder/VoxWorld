@@ -13,6 +13,7 @@ platform work can land without disturbing the production server or native client
 - Same-origin `/play` connection default for Railway and local gateway hosting
 - Keyboard input forwarding for WASD, Space, and Shift
 - Snapshot-driven canvas view for the player and nearby entities
+- Browser-persisted guest name passed through `/play?name=...`
 
 ## Build
 
