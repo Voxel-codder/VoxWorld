@@ -543,6 +543,9 @@ fn snapshot_entities(client: &Client) -> Vec<SnapshotEntity> {
     let positions = ecs.read_storage::<comp::Pos>();
     let healths = ecs.read_storage::<comp::Health>();
     let uids = ecs.read_storage::<Uid>();
+    let alignments = ecs.read_storage::<comp::Alignment>();
+    let pickups = ecs.read_storage::<comp::PickupItem>();
+    let stats = ecs.read_storage::<comp::Stats>();
     let players = client.player_list();
 
     let mut entities = (&ecs_entities, &uids, &positions)
@@ -556,14 +559,25 @@ fn snapshot_entities(client: &Client) -> Vec<SnapshotEntity> {
             }
 
             let player = players.get(uid);
+            let pickup = pickups.get(entity);
+            let health = healths.get(entity);
             Some(SnapshotEntity {
                 uid: uid.to_string(),
-                name: player.map(|player| player.player_alias.clone()),
-                kind: if player.is_some() { "player" } else { "entity" },
+                name: snapshot_entity_name(
+                    player.map(|player| player.player_alias.clone()),
+                    pickup,
+                    stats.get(entity),
+                ),
+                kind: snapshot_entity_kind(
+                    player.is_some(),
+                    pickup.is_some(),
+                    alignments.get(entity),
+                    health,
+                ),
                 is_self: self_uid == Some(*uid),
                 position: [position.0.x, position.0.y, position.0.z],
                 distance,
-                health: healths.get(entity).map(|health| PlayerStat {
+                health: health.map(|health| PlayerStat {
                     current: health.current(),
                     maximum: health.maximum(),
                     fraction: health.fraction().clamp(0.0, 1.0),
@@ -575,6 +589,39 @@ fn snapshot_entities(client: &Client) -> Vec<SnapshotEntity> {
     entities.sort_by(|a, b| a.distance.total_cmp(&b.distance));
     entities.truncate(SNAPSHOT_ENTITY_LIMIT);
     entities
+}
+
+fn snapshot_entity_name(
+    player_name: Option<String>,
+    pickup: Option<&comp::PickupItem>,
+    stats: Option<&comp::Stats>,
+) -> Option<String> {
+    player_name
+        .or_else(|| pickup.map(pickup_item_label))
+        .or_else(|| stats.map(|stats| content_text(&stats.name)))
+}
+
+fn snapshot_entity_kind(
+    is_player: bool,
+    is_pickup: bool,
+    alignment: Option<&comp::Alignment>,
+    health: Option<&comp::Health>,
+) -> &'static str {
+    if is_player {
+        "player"
+    } else if is_pickup {
+        "pickup"
+    } else {
+        match alignment {
+            Some(comp::Alignment::Npc) => "npc",
+            Some(comp::Alignment::Tame | comp::Alignment::Owned(_) | comp::Alignment::Passive) => {
+                "friendly"
+            },
+            Some(comp::Alignment::Enemy | comp::Alignment::Wild) if health.is_some() => "enemy",
+            _ if health.is_some() => "creature",
+            _ => "entity",
+        }
+    }
 }
 
 fn snapshot_interaction(client: &Client) -> Option<SnapshotInteraction> {
@@ -636,15 +683,20 @@ fn nearest_pickup_target(client: &Client) -> Option<(EcsEntity, String, f32)> {
                 return None;
             }
 
-            let amount = pickup.amount();
-            let label = if amount > 1 {
-                format!("Pick up {} x{}", pickup.legacy_name(), amount)
-            } else {
-                format!("Pick up {}", pickup.legacy_name())
-            };
+            let label = format!("Pick up {}", pickup_item_label(pickup));
             Some((entity, label, distance))
         })
         .min_by(|(_, _, a), (_, _, b)| a.total_cmp(b))
+}
+
+#[allow(deprecated)]
+fn pickup_item_label(pickup: &comp::PickupItem) -> String {
+    let amount = pickup.amount();
+    if amount > 1 {
+        format!("{} x{}", pickup.legacy_name(), amount)
+    } else {
+        pickup.legacy_name().to_string()
+    }
 }
 
 fn nearest_interactable_target(client: &Client) -> Option<(EcsEntity, String, f32)> {

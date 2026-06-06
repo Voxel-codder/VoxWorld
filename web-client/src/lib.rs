@@ -1151,13 +1151,7 @@ fn draw_snapshot(
             continue;
         }
 
-        let (radius, color) = if entity.is_self {
-            (8.0, "#e7f7ff")
-        } else if entity.kind == "player" {
-            (6.0, "#3ab49b")
-        } else {
-            (4.0, "#d8b15f")
-        };
+        let (radius, color) = entity_dot_style(entity);
 
         context.begin_path();
         context.set_fill_style(&JsValue::from_str(color));
@@ -1170,12 +1164,12 @@ fn draw_snapshot(
             draw_entity_health_bar(context, x, y - radius - 10.0, health);
         }
 
-        if entity.is_self || entity.kind == "player" {
-            if let Some(name) = &entity.name {
-                context.set_fill_style(&JsValue::from_str("rgba(231, 247, 255, 0.82)"));
-                context.set_font("12px system-ui, sans-serif");
-                let _ = context.fill_text(name, x + 10.0, y - 10.0);
-            }
+        if should_draw_entity_label(entity)
+            && let Some(name) = &entity.name
+        {
+            context.set_fill_style(&JsValue::from_str("rgba(231, 247, 255, 0.82)"));
+            context.set_font("12px system-ui, sans-serif");
+            let _ = context.fill_text_with_max_width(name, x + 10.0, y - 10.0, 150.0);
         }
     }
 
@@ -1228,6 +1222,31 @@ fn draw_snapshot(
     if let Some(interaction) = &snapshot.interaction {
         draw_interaction_hint(context, width, height, interaction);
     }
+}
+
+fn entity_dot_style(entity: &EntityView) -> (f64, &'static str) {
+    if entity.is_self {
+        (8.0, "#e7f7ff")
+    } else {
+        match entity.kind.as_str() {
+            "player" => (6.0, "#3ab49b"),
+            "npc" => (5.0, "#8fb8ff"),
+            "friendly" => (5.0, "#9cdcbe"),
+            "pickup" => (4.0, "#d8b15f"),
+            "enemy" => (5.0, "#d95f5f"),
+            "creature" => (4.0, "#f0a867"),
+            _ => (4.0, "#d8b15f"),
+        }
+    }
+}
+
+fn should_draw_entity_label(entity: &EntityView) -> bool {
+    entity.name.is_some()
+        && (entity.is_self
+            || matches!(
+                entity.kind.as_str(),
+                "player" | "npc" | "friendly" | "pickup" | "enemy"
+            ))
 }
 
 #[allow(deprecated)]

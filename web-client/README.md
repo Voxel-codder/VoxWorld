@@ -16,7 +16,7 @@ platform work can land without disturbing the production server or native client
 - Mouse and touch look-direction forwarding from the canvas
 - Mouse primary and secondary action forwarding from the canvas
 - On-screen touch movement, combat, interact, pickup, wield, loadout, sneak, sit, and respawn controls for mobile browsers
-- Snapshot-driven canvas view for the player, nearby entities, health, entity health, and energy
+- Snapshot-driven canvas view for the player, nearby players, NPCs, pickups, enemies, health, entity health, and energy
 - Defeated-state respawn hint from `/play` snapshots
 - Inventory summary HUD from `/play` snapshots
 - Nearby pickup/NPC interaction hint from `/play` snapshots
