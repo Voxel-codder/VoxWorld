@@ -46,6 +46,9 @@ Current milestone:
 - convert non-empty original terrain `SpriteKind` blocks into temporary 3D
   prop meshes so plants, resources, containers, lamps, and structural sprites
   from generated chunks are visible in the browser preview;
+- cache original terrain sprite prop metadata and report the nearest
+  collectable/interactable terrain prop and entity target around the
+  browser-side player;
 - preserve original `EntityInfo.body` categories in the web preview and render
   body-aware temporary silhouettes for humanoid, quadruped, flyer, fish, large,
   and object entities;

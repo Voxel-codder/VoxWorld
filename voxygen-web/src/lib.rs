@@ -614,7 +614,7 @@ impl VoxygenWebClient {
              {:.1}. Player facing: {:.0} deg. Blocked terrain moves: {}. WebGPU block faces: {}. \
              Filled blocks: {}. Liquid blocks: {}. Terrain sprite props: {}. Visible entity \
              markers: {}. Entity spawns: {}. World features loaded: {}. Wildlife spawn manifests: \
-             {}.",
+             {}.{}",
             self.world_mesh.seed,
             self.world_mesh.generated_chunks,
             patch_x,
@@ -640,7 +640,8 @@ impl VoxygenWebClient {
             self.world_mesh.entity_markers.len(),
             self.world_mesh.generated_entity_spawns,
             self.world_mesh.enabled_world_features,
-            self.world_mesh.wildlife_spawn_manifests
+            self.world_mesh.wildlife_spawn_manifests,
+            self.world_preview.interaction_summary(self.player.wpos)
         )
     }
 }

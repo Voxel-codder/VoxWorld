@@ -222,7 +222,7 @@ impl OriginalWorldPreview {
                         format!("original World::generate_chunk cancelled at {chunk_pos:?}")
                     })?
             };
-            let mesh = build_chunk_mesh_fragment(&terrain_chunk);
+            let mesh = build_chunk_mesh_fragment(&terrain_chunk, *chunk_pos);
             self.chunk_cache.insert(key, GeneratedPreviewChunk {
                 pos: *chunk_pos,
                 chunk: terrain_chunk,
@@ -247,6 +247,20 @@ impl OriginalWorldPreview {
             self.seed,
             self.enabled_world_features,
             self.wildlife_spawn_manifests,
+        )
+    }
+
+    pub fn interaction_summary(&self, player_wpos: Vec2<f32>) -> String {
+        let terrain_prop = self.nearest_terrain_prop(player_wpos, 96.0);
+        let entity = self.nearest_entity(player_wpos, 96.0);
+        format!(
+            " Nearest terrain target: {}. Nearest entity target: {}.",
+            terrain_prop
+                .map(|focus| focus.summary())
+                .unwrap_or_else(|| "none".to_owned()),
+            entity
+                .map(|focus| focus.summary())
+                .unwrap_or_else(|| "none".to_owned())
         )
     }
 }
@@ -286,6 +300,49 @@ impl OriginalWorldPreview {
             .get(&chunk_key(chunk_pos))
             .map(|preview_chunk| preview_chunk.chunk.find_accessible_pos(sample_wpos, false))
     }
+
+    fn nearest_terrain_prop(
+        &self,
+        player_wpos: Vec2<f32>,
+        radius_blocks: f32,
+    ) -> Option<TerrainPropFocus<'_>> {
+        let radius_squared = radius_blocks * radius_blocks;
+        self.chunk_cache
+            .values()
+            .flat_map(|preview_chunk| preview_chunk.mesh.terrain_props.iter())
+            .filter_map(|prop| {
+                let prop_wpos = Vec2::new(prop.wpos.x as f32 + 0.5, prop.wpos.y as f32 + 0.5);
+                let distance_squared = vec2_distance_squared(player_wpos, prop_wpos);
+                (distance_squared <= radius_squared).then_some((prop, distance_squared))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(prop, distance_squared)| TerrainPropFocus {
+                prop,
+                distance: distance_squared.sqrt(),
+            })
+    }
+
+    fn nearest_entity(
+        &self,
+        player_wpos: Vec2<f32>,
+        radius_blocks: f32,
+    ) -> Option<EntityFocus<'_>> {
+        let radius_squared = radius_blocks * radius_blocks;
+        self.chunk_cache
+            .values()
+            .flat_map(|preview_chunk| preview_chunk.entity_spawns.iter())
+            .flat_map(entity_spawn_entities)
+            .filter_map(|entity| {
+                let entity_wpos = Vec2::new(entity.pos.x, entity.pos.y);
+                let distance_squared = vec2_distance_squared(player_wpos, entity_wpos);
+                (distance_squared <= radius_squared).then_some((entity, distance_squared))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(entity, distance_squared)| EntityFocus {
+                entity,
+                distance: distance_squared.sqrt(),
+            })
+    }
 }
 
 pub fn build_original_world_preview() -> Result<OriginalWorldPreview, String> {
@@ -324,6 +381,61 @@ struct ChunkMeshFragment {
     filled_blocks: usize,
     liquid_blocks: usize,
     sprite_props: usize,
+    terrain_props: Vec<TerrainSpriteProp>,
+}
+
+struct TerrainSpriteProp {
+    wpos: Vec3<i32>,
+    sprite: SpriteKind,
+    category: Category,
+    interaction: &'static str,
+}
+
+impl TerrainSpriteProp {
+    fn new(chunk_pos: Vec2<i32>, local_pos: Vec3<i32>, sprite: SpriteKind) -> Self {
+        let rect_size = TerrainChunkSize::RECT_SIZE.as_::<i32>();
+        let chunk_origin = chunk_pos * rect_size;
+        Self {
+            wpos: Vec3::new(
+                chunk_origin.x + local_pos.x,
+                chunk_origin.y + local_pos.y,
+                local_pos.z,
+            ),
+            sprite,
+            category: sprite.category(),
+            interaction: sprite_interaction_label(sprite),
+        }
+    }
+}
+
+struct TerrainPropFocus<'a> {
+    prop: &'a TerrainSpriteProp,
+    distance: f32,
+}
+
+impl TerrainPropFocus<'_> {
+    fn summary(&self) -> String {
+        format!(
+            "{} {:?} {:?} at {:.1}m",
+            self.prop.interaction, self.prop.category, self.prop.sprite, self.distance
+        )
+    }
+}
+
+struct EntityFocus<'a> {
+    entity: &'a EntityInfo,
+    distance: f32,
+}
+
+impl EntityFocus<'_> {
+    fn summary(&self) -> String {
+        let role = entity_role_label(self.entity);
+        let body = entity_body_label(&self.entity.body);
+        format!(
+            "{} {} {:?} at {:.1}m",
+            role, body, self.entity.alignment, self.distance
+        )
+    }
 }
 
 fn mesh_from_terrain_chunks(
@@ -429,11 +541,106 @@ fn count_entity_spawns(entity_spawns: &[EntitySpawn]) -> usize {
         .sum()
 }
 
-fn build_chunk_mesh_fragment(chunk: &TerrainChunk) -> ChunkMeshFragment {
+fn entity_spawn_entities(entity_spawn: &EntitySpawn) -> Box<dyn Iterator<Item = &EntityInfo> + '_> {
+    match entity_spawn {
+        EntitySpawn::Entity(entity) => Box::new(std::iter::once(entity.as_ref())),
+        EntitySpawn::Group(group) => Box::new(group.iter()),
+    }
+}
+
+fn vec2_distance_squared(a: Vec2<f32>, b: Vec2<f32>) -> f32 {
+    let delta = a - b;
+    delta.x * delta.x + delta.y * delta.y
+}
+
+fn sprite_interaction_label(sprite: SpriteKind) -> &'static str {
+    if sprite.is_defined_as_container() {
+        "container"
+    } else if sprite_is_unlock(sprite) {
+        "unlock"
+    } else if sprite.mine_tool().is_some() {
+        "mine"
+    } else if sprite.collectible_info().is_some() {
+        match sprite.category() {
+            Category::Plant | Category::Resource => "collect",
+            _ => "interact",
+        }
+    } else {
+        match sprite.category() {
+            Category::Lamp => "light",
+            Category::Furniture | Category::Structural | Category::Modular => "inspect",
+            _ => "prop",
+        }
+    }
+}
+
+fn sprite_is_unlock(sprite: SpriteKind) -> bool {
+    matches!(
+        sprite,
+        SpriteKind::Keyhole
+            | SpriteKind::BoneKeyhole
+            | SpriteKind::HaniwaKeyhole
+            | SpriteKind::SahaginKeyhole
+            | SpriteKind::VampireKeyhole
+            | SpriteKind::GlassKeyhole
+            | SpriteKind::KeyholeBars
+            | SpriteKind::TerracottaKeyhole
+            | SpriteKind::MyrmidonKeyhole
+            | SpriteKind::MinotaurKeyhole
+    )
+}
+
+fn entity_role_label(entity: &EntityInfo) -> &'static str {
+    if entity.trading_information.is_some() {
+        "trader"
+    } else if let Some(special_entity) = &entity.special_entity {
+        match special_entity {
+            SpecialEntity::Waypoint => "waypoint",
+            SpecialEntity::Teleporter(_) => "teleporter",
+            SpecialEntity::ArenaTotem { .. } => "arena totem",
+        }
+    } else if entity.has_agency {
+        match entity.alignment {
+            Alignment::Enemy => "enemy",
+            Alignment::Npc => "npc",
+            Alignment::Tame | Alignment::Owned(_) => "ally",
+            Alignment::Passive => "passive",
+            Alignment::Wild => "wild",
+        }
+    } else {
+        "static"
+    }
+}
+
+fn entity_body_label(body: &Body) -> &'static str {
+    match body {
+        Body::Humanoid(_) => "humanoid",
+        Body::BipedSmall(_) => "small biped",
+        Body::BipedLarge(_) => "large biped",
+        Body::QuadrupedSmall(_) => "small quadruped",
+        Body::QuadrupedMedium(_) => "quadruped",
+        Body::QuadrupedLow(_) => "low quadruped",
+        Body::Theropod(_) => "theropod",
+        Body::BirdMedium(_) => "bird",
+        Body::BirdLarge(_) => "large bird",
+        Body::Dragon(_) => "dragon",
+        Body::FishSmall(_) => "small fish",
+        Body::FishMedium(_) => "fish",
+        Body::Golem(_) => "golem",
+        Body::Object(_) => "object",
+        Body::Item(_) => "item",
+        Body::Ship(_) => "ship",
+        Body::Crustacean(_) => "crustacean",
+        Body::Arthropod(_) => "arthropod",
+        Body::Plugin(_) => "plugin",
+    }
+}
+
+fn build_chunk_mesh_fragment(chunk: &TerrainChunk, chunk_pos: Vec2<i32>) -> ChunkMeshFragment {
     let mut builder = BlockMeshBuilder::new();
     let mut filled_blocks = 0usize;
     let mut liquid_blocks = 0usize;
-    let mut sprite_props = 0usize;
+    let mut terrain_props = Vec::new();
 
     for (pos, block) in chunk.iter_changed() {
         if let Some(sprite) = block
@@ -441,7 +648,7 @@ fn build_chunk_mesh_fragment(chunk: &TerrainChunk) -> ChunkMeshFragment {
             .filter(|sprite| *sprite != SpriteKind::Empty)
         {
             builder.add_sprite_prop(pos, block, sprite);
-            sprite_props += 1;
+            terrain_props.push(TerrainSpriteProp::new(chunk_pos, pos, sprite));
         }
 
         let renderable = block.is_filled() || block.is_liquid();
@@ -464,7 +671,8 @@ fn build_chunk_mesh_fragment(chunk: &TerrainChunk) -> ChunkMeshFragment {
         face_count: builder.face_count,
         filled_blocks,
         liquid_blocks,
-        sprite_props,
+        sprite_props: terrain_props.len(),
+        terrain_props,
     }
 }
 
