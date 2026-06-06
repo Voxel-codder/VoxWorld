@@ -18,6 +18,8 @@ use tokio::{
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
+mod play_session;
+
 type GatewayResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 #[derive(Debug, Parser)]
@@ -88,6 +90,10 @@ async fn handle_connection(
         return serve_http(socket, peer, &static_dir, upstream, query_server).await;
     }
 
+    if is_play_request(&request_head) {
+        return handle_play_connection(socket, peer, upstream).await;
+    }
+
     info!(%peer, "browser websocket connected");
 
     let websocket = accept_async(socket).await?;
@@ -141,6 +147,10 @@ async fn handle_connection(
 }
 
 fn is_websocket_request(request_head: &str) -> bool {
+    is_raw_proxy_request(request_head) || is_play_request(request_head)
+}
+
+fn is_raw_proxy_request(request_head: &str) -> bool {
     let mut lines = request_head.lines();
     let request_line = lines.next().unwrap_or_default();
 
@@ -148,6 +158,76 @@ fn is_websocket_request(request_head: &str) -> bool {
         && request_head
             .lines()
             .any(|line| line.eq_ignore_ascii_case("upgrade: websocket"))
+}
+
+fn is_play_request(request_head: &str) -> bool {
+    let mut lines = request_head.lines();
+    let request_line = lines.next().unwrap_or_default();
+
+    request_line.starts_with("GET /play ")
+        && request_head
+            .lines()
+            .any(|line| line.eq_ignore_ascii_case("upgrade: websocket"))
+}
+
+async fn handle_play_connection(
+    socket: TcpStream,
+    peer: SocketAddr,
+    upstream: SocketAddr,
+) -> GatewayResult<()> {
+    static SESSION_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+    info!(%peer, "browser play session connected");
+
+    let websocket = accept_async(socket).await?;
+    let (mut websocket_write, mut websocket_read) = websocket.split();
+    let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let username = format!(
+        "web{:06}",
+        SESSION_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let session = play_session::start(upstream, username, outbound_tx);
+
+    let browser_to_session = async {
+        while let Some(message) = websocket_read.next().await {
+            match message? {
+                Message::Text(text) => {
+                    match serde_json::from_str::<play_session::BrowserCommand>(&text) {
+                        Ok(command) => {
+                            if session.send(command).is_err() {
+                                break;
+                            }
+                        },
+                        Err(error) => warn!(%peer, %error, "invalid play command"),
+                    }
+                },
+                Message::Close(_) => break,
+                Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {},
+            }
+        }
+
+        GatewayResult::Ok(())
+    };
+
+    let session_to_browser = async {
+        while let Some(message) = outbound_rx.recv().await {
+            websocket_write.send(Message::Text(message.into())).await?;
+        }
+
+        if let Err(error) = websocket_write.close().await {
+            error!(%peer, %error, "failed to close play websocket");
+        }
+
+        GatewayResult::Ok(())
+    };
+
+    select! {
+        result = browser_to_session => result?,
+        result = session_to_browser => result?,
+    }
+
+    info!(%peer, "browser play session disconnected");
+    Ok(())
 }
 
 async fn serve_http(
@@ -256,7 +336,8 @@ async fn status_body(upstream: SocketAddr, query_server: SocketAddr) -> GatewayR
     let readiness = readiness_status(upstream, query_server).await;
     let body = json!({
         "service": "voxworld-web-gateway",
-        "websocket_path": "/ws",
+        "play_websocket_path": "/play",
+        "raw_websocket_path": "/ws",
         "upstream": {
             "tcp_addr": upstream.to_string(),
             "tcp_reachable": readiness.tcp_reachable,

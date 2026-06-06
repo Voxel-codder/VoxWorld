@@ -9230,11 +9230,15 @@ version = "0.18.0"
 dependencies = [
  "clap",
  "futures-util",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
+ "vek 0.17.2",
+ "veloren-client",
+ "veloren-common",
  "veloren-query-server",
 ]
 

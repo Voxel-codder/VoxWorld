@@ -28,7 +28,7 @@
       const connectButton = document.getElementById("connect-button");
       if (serverUrl) {
         const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-        serverUrl.value = `${scheme}://${window.location.host}/ws`;
+        serverUrl.value = `${scheme}://${window.location.host}/play`;
       }
       if (connectButton) {
         connectButton.disabled = true;

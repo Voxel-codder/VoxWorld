@@ -1,12 +1,13 @@
 # Vox World Web Gateway
 
 This is an early HTTP and WebSocket gateway for the browser client. It serves
-`web-client/web` over HTTP and forwards `/ws` browser WebSocket connections to
-the native Vox World TCP server port.
+`web-client/web` over HTTP and hosts `/play` browser sessions backed by the
+native `veloren-client` crate.
 
-It is a bridge, not the final networking layer. The full web port still needs a
-browser-compatible transport implementation that can speak the game protocol
-cleanly over WebSocket or WebTransport.
+For each `/play` WebSocket, the gateway starts a headless native client session,
+auto-creates or loads a character, ticks the client, accepts browser JSON input,
+and sends browser-friendly JSON session messages back to the page. `/ws` remains
+available as a raw WebSocket-to-TCP proxy for lower-level transport experiments.
 
 ## Run
 
@@ -22,4 +23,17 @@ Open the web client at:
 http://localhost:14080
 ```
 
-The page automatically points its WebSocket connection at `/ws` on the same host.
+The page automatically points its WebSocket connection at `/play` on the same
+host.
+
+## Browser Protocol
+
+The browser sends input messages such as:
+
+```json
+{"type":"input","move_x":0,"move_y":1,"move_z":0,"look_x":0,"look_y":1,"look_z":0}
+```
+
+The gateway responds with stage, snapshot, event, and error messages. Snapshots
+currently include username, in-game state, position, player names, and character
+count.

@@ -8,9 +8,10 @@ platform work can land without disturbing the production server or native client
 
 - Browser boot path through `wasm-bindgen`
 - Canvas bootstrap for the future renderer
-- WebSocket connection shell for the future game transport
+- WebSocket connection shell for the `/play` headless session transport
 - Static web page that can be hosted by any HTTP server
-- Same-origin `/ws` connection default for Railway and local gateway hosting
+- Same-origin `/play` connection default for Railway and local gateway hosting
+- Keyboard input forwarding for WASD, Space, and Shift
 
 ## Build
 
@@ -43,8 +44,8 @@ http://localhost:14080
 
 ## Porting Roadmap
 
-1. Add a WebSocket transport to the shared network layer.
-2. Connect this WASM shell to a small gateway or server-side WebSocket endpoint.
-3. Move enough client state into browser-compatible crates to enter the world.
+1. Expand `/play` snapshots from position/player metadata to nearby entities.
+2. Render the headless session snapshots on the browser canvas.
+3. Add browser-side character naming and basic account/session UX.
 4. Replace the canvas placeholder with the real renderer path.
 5. Add asset manifest loading, compression, caching, and progressive download.

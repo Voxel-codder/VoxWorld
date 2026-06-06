@@ -10,8 +10,10 @@ workspace = true
 
 [dependencies]
 clap = { workspace = true }
+common = { package = "veloren-common", path = "../common", features = ["no-assets"] }
 futures-util = { workspace = true, features = ["sink", "std"] }
 query-server = { package = "veloren-query-server", path = "../common/query_server", features = ["client"] }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = [
     "fs",
@@ -19,7 +21,10 @@ tokio = { workspace = true, features = [
     "macros",
     "net",
     "rt-multi-thread",
+    "sync",
 ] }
 tokio-tungstenite = "0.28"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+vek = { workspace = true }
+veloren-client = { path = "../client", default-features = false }

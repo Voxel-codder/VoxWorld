@@ -31,6 +31,7 @@ features = [
     "HtmlCanvasElement",
     "HtmlElement",
     "HtmlInputElement",
+    "KeyboardEvent",
     "MessageEvent",
     "WebSocket",
     "Window",

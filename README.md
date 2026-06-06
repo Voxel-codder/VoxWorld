@@ -18,7 +18,7 @@ occasional compatibility changes between builds.
 - `server/` - game server systems and persistence
 - `client/` - client-side game logic
 - `web-client/` - browser/WASM client porting surface
-- `web-gateway/` - HTTP static server and WebSocket-to-TCP gateway
+- `web-gateway/` - HTTP static server, browser play session host, and raw WebSocket-to-TCP gateway
 - `voxygen/` - native graphical client
 - `common/` - shared game data, networking, ECS, and utilities
 - `assets/` - game data, localization, audio, models, and metadata
@@ -83,9 +83,11 @@ VELOREN_GIT_VERSION=/0/0
 Use a persistent Railway volume mounted at `/data` if you want server state,
 configuration, and player data to survive redeploys.
 
-The public Railway HTTP domain serves the browser client and upgrades `/ws`
-connections to the web gateway. The gateway forwards browser traffic to the
-native game server on `127.0.0.1:14004`.
+The public Railway HTTP domain serves the browser client and upgrades `/play`
+connections to the web gateway. The gateway starts a headless native client
+session for each browser connection, then relays browser JSON input into the
+native game client. `/ws` remains available as a raw WebSocket-to-TCP proxy for
+lower-level transport experiments.
 
 The gateway also exposes `/api/status` so the web client can show whether the
 native server is reachable and how many players are online. Railway uses
