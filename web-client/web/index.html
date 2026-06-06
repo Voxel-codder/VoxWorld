@@ -15,6 +15,7 @@
         <input id="server-url" autocomplete="off" spellcheck="false" />
         <button id="connect-button" type="button">Connect</button>
       </div>
+      <p id="server-summary">Checking server...</p>
       <p id="connection-status">Not connected</p>
     </form>
 
@@ -26,6 +27,34 @@
         const scheme = window.location.protocol === "https:" ? "wss" : "ws";
         serverUrl.value = `${scheme}://${window.location.host}/ws`;
       }
+
+      async function refreshStatus() {
+        const summary = document.getElementById("server-summary");
+        if (!summary) {
+          return;
+        }
+
+        try {
+          const response = await fetch("/api/status", { cache: "no-store" });
+          const data = await response.json();
+          const query = data.query_server?.result;
+          const tcpReachable = Boolean(data.upstream?.tcp_reachable);
+
+          if (query?.ok) {
+            summary.textContent = `${query.players}/${query.player_cap} online`;
+          } else if (tcpReachable) {
+            summary.textContent = "Server starting...";
+          } else {
+            summary.textContent = "Server offline";
+          }
+        } catch (error) {
+          console.error(error);
+          summary.textContent = "Status unavailable";
+        }
+      }
+
+      refreshStatus();
+      window.setInterval(refreshStatus, 5000);
 
       init().then(() => {
         document.getElementById("connect-button")?.click();

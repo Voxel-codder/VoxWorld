@@ -6,11 +6,14 @@ use std::{
 
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
+use query_server::client::QueryClient;
+use serde_json::{Value, json};
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     select,
+    time::{Duration, timeout},
 };
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
@@ -26,6 +29,9 @@ struct Args {
 
     #[arg(long, env = "VOXWORLD_UPSTREAM", default_value = "127.0.0.1:14004")]
     upstream: SocketAddr,
+
+    #[arg(long, env = "VOXWORLD_QUERY_SERVER", default_value = "127.0.0.1:14006")]
+    query_server: SocketAddr,
 
     #[arg(
         long,
@@ -46,6 +52,7 @@ async fn main() -> GatewayResult<()> {
     info!(
         listen = %args.listen,
         upstream = %args.upstream,
+        query_server = %args.query_server,
         static_dir = %args.static_dir.display(),
         "web gateway listening"
     );
@@ -53,10 +60,13 @@ async fn main() -> GatewayResult<()> {
     loop {
         let (socket, peer) = listener.accept().await?;
         let upstream = args.upstream;
+        let query_server = args.query_server;
         let static_dir = args.static_dir.clone();
 
         tokio::spawn(async move {
-            if let Err(error) = handle_connection(socket, peer, upstream, static_dir).await {
+            if let Err(error) =
+                handle_connection(socket, peer, upstream, query_server, static_dir).await
+            {
                 warn!(%peer, %error, "web gateway connection ended");
             }
         });
@@ -67,6 +77,7 @@ async fn handle_connection(
     socket: TcpStream,
     peer: SocketAddr,
     upstream: SocketAddr,
+    query_server: SocketAddr,
     static_dir: PathBuf,
 ) -> GatewayResult<()> {
     let mut peek = [0_u8; 2048];
@@ -74,7 +85,7 @@ async fn handle_connection(
     let request_head = String::from_utf8_lossy(&peek[..read]);
 
     if !is_websocket_request(&request_head) {
-        return serve_static(socket, peer, &static_dir).await;
+        return serve_http(socket, peer, &static_dir, upstream, query_server).await;
     }
 
     info!(%peer, "browser websocket connected");
@@ -139,10 +150,12 @@ fn is_websocket_request(request_head: &str) -> bool {
             .any(|line| line.eq_ignore_ascii_case("upgrade: websocket"))
 }
 
-async fn serve_static(
+async fn serve_http(
     mut socket: TcpStream,
     peer: SocketAddr,
     static_dir: &Path,
+    upstream: SocketAddr,
+    query_server: SocketAddr,
 ) -> GatewayResult<()> {
     let mut request = Vec::with_capacity(2048);
     let mut buffer = [0_u8; 1024];
@@ -170,6 +183,19 @@ async fn serve_static(
         .await?;
         return Ok(());
     };
+
+    if path == "/api/status" {
+        let body = status_body(upstream, query_server).await?;
+        write_response_no_store(
+            &mut socket,
+            "200 OK",
+            "application/json; charset=utf-8",
+            &body,
+        )
+        .await?;
+        info!(%peer, "served status endpoint");
+        return Ok(());
+    }
 
     let Some(file_path) = static_file_path(static_dir, path) else {
         write_response(
@@ -201,6 +227,70 @@ async fn serve_static(
     }
 
     Ok(())
+}
+
+async fn status_body(upstream: SocketAddr, query_server: SocketAddr) -> GatewayResult<Vec<u8>> {
+    let query_result = query_server_status(query_server).await;
+    let tcp_reachable = if query_result.ok {
+        true
+    } else {
+        matches!(
+            timeout(Duration::from_millis(500), TcpStream::connect(upstream)).await,
+            Ok(Ok(_))
+        )
+    };
+    let body = json!({
+        "service": "voxworld-web-gateway",
+        "websocket_path": "/ws",
+        "upstream": {
+            "tcp_addr": upstream.to_string(),
+            "tcp_reachable": tcp_reachable,
+        },
+        "query_server": {
+            "addr": query_server.to_string(),
+            "result": query_result.body,
+        },
+    });
+
+    Ok(serde_json::to_vec(&body)?)
+}
+
+struct QueryStatus {
+    ok: bool,
+    body: Value,
+}
+
+async fn query_server_status(query_server: SocketAddr) -> QueryStatus {
+    let mut client = QueryClient::new(query_server);
+
+    match timeout(Duration::from_millis(1500), client.server_info()).await {
+        Ok(Ok((info, latency))) => QueryStatus {
+            ok: true,
+            body: json!({
+                "ok": true,
+                "players": info.players_count,
+                "player_cap": info.player_cap,
+                "git_hash": info.git_hash,
+                "git_timestamp": info.git_timestamp,
+                "battlemode": format!("{:?}", info.battlemode),
+                "latency_ms": latency.as_millis(),
+            }),
+        },
+        Ok(Err(error)) => QueryStatus {
+            ok: false,
+            body: json!({
+                "ok": false,
+                "error": format!("{error:?}"),
+            }),
+        },
+        Err(_) => QueryStatus {
+            ok: false,
+            body: json!({
+                "ok": false,
+                "error": "timeout",
+            }),
+        },
+    }
 }
 
 fn request_path(request: &str) -> Option<&str> {
@@ -250,10 +340,29 @@ async fn write_response(
     content_type: &str,
     body: &[u8],
 ) -> GatewayResult<()> {
+    write_response_with_cache(socket, status, content_type, body, "public, max-age=60").await
+}
+
+async fn write_response_no_store(
+    socket: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &[u8],
+) -> GatewayResult<()> {
+    write_response_with_cache(socket, status, content_type, body, "no-store").await
+}
+
+async fn write_response_with_cache(
+    socket: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &[u8],
+    cache_control: &str,
+) -> GatewayResult<()> {
     let headers = format!(
         "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: \
-         {}\r\ncache-control: public, max-age=60\r\nconnection: close\r\n\r\n",
-        body.len()
+         {}\r\ncache-control: {cache_control}\r\nconnection: close\r\n\r\n",
+        body.len(),
     );
 
     socket.write_all(headers.as_bytes()).await?;

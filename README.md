@@ -87,6 +87,9 @@ The public Railway HTTP domain serves the browser client and upgrades `/ws`
 connections to the web gateway. The gateway forwards browser traffic to the
 native game server on `127.0.0.1:14004`.
 
+The gateway also exposes `/api/status` so the web client can show whether the
+native server is reachable and how many players are online.
+
 The server default player cap is 100.
 
 ## License

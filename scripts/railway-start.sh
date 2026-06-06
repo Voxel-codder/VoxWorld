@@ -27,11 +27,13 @@ done
 
 listen_addr="0.0.0.0:${PORT:-8080}"
 upstream_addr="${VOXWORLD_UPSTREAM:-127.0.0.1:14004}"
+query_addr="${VOXWORLD_QUERY_SERVER:-127.0.0.1:14006}"
 static_dir="${VOXWORLD_WEB_STATIC_DIR:-web-client/web}"
 
 ./target/release/voxworld-web-gateway \
   --listen "${listen_addr}" \
   --upstream "${upstream_addr}" \
+  --query-server "${query_addr}" \
   --static-dir "${static_dir}" &
 gateway_pid="$!"
 
