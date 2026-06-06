@@ -4,7 +4,7 @@ use common::{
     comp::{Alignment, Body},
     generation::{EntityInfo, EntitySpawn, SpecialEntity},
     spot::Spot,
-    terrain::{Block, TerrainChunk, TerrainChunkSize},
+    terrain::{Block, BlockKind, TerrainChunk, TerrainChunkSize},
     vol::{ReadVol, RectVolSize},
 };
 use rayon::ThreadPoolBuilder;
@@ -710,18 +710,71 @@ impl Face {
 }
 
 fn block_color(block: &Block) -> [f32; 3] {
-    if block.is_liquid() {
-        return [0.08, 0.28, 0.72];
-    }
-
-    block
+    let kind = block.kind();
+    let base_color = block
         .get_color()
-        .map(|color| {
-            [
-                color.r as f32 / 255.0,
-                color.g as f32 / 255.0,
-                color.b as f32 / 255.0,
-            ]
-        })
-        .unwrap_or([0.58, 0.58, 0.62])
+        .map(|color| rgb8_to_unit([color.r, color.g, color.b]))
+        .unwrap_or_else(|| fallback_block_color(kind));
+
+    match kind {
+        BlockKind::Air => base_color,
+        BlockKind::Water => blend_color(base_color, [0.09, 0.34, 0.82], 0.86),
+        BlockKind::Lava => scale_color(blend_color(base_color, [1.0, 0.24, 0.02], 0.72), 1.32),
+        BlockKind::GlowingRock | BlockKind::GlowingWeakRock | BlockKind::GlowingMushroom => {
+            scale_color(blend_color(base_color, [0.78, 0.95, 1.0], 0.18), 1.22)
+        },
+        BlockKind::Grass => blend_color(base_color, [0.18, 0.48, 0.18], 0.26),
+        BlockKind::Snow | BlockKind::ArtSnow => {
+            scale_color(blend_color(base_color, [0.84, 0.90, 1.0], 0.34), 1.08)
+        },
+        BlockKind::Ice => scale_color(blend_color(base_color, [0.48, 0.78, 1.0], 0.40), 1.08),
+        BlockKind::Leaves | BlockKind::ArtLeaves => {
+            blend_color(base_color, [0.10, 0.40, 0.12], 0.22)
+        },
+        BlockKind::Wood => blend_color(base_color, [0.40, 0.20, 0.08], 0.22),
+        BlockKind::Sand => blend_color(base_color, [0.86, 0.70, 0.42], 0.18),
+        BlockKind::Earth => blend_color(base_color, [0.42, 0.28, 0.16], 0.18),
+        BlockKind::Rock | BlockKind::WeakRock => blend_color(base_color, [0.50, 0.52, 0.56], 0.10),
+        BlockKind::Misc => base_color,
+    }
+}
+
+fn fallback_block_color(kind: BlockKind) -> [f32; 3] {
+    match kind {
+        BlockKind::Air => [0.0, 0.0, 0.0],
+        BlockKind::Water => [0.08, 0.30, 0.76],
+        BlockKind::Rock | BlockKind::WeakRock => [0.48, 0.48, 0.52],
+        BlockKind::Lava => [1.0, 0.26, 0.02],
+        BlockKind::GlowingRock | BlockKind::GlowingWeakRock => [0.62, 0.82, 0.98],
+        BlockKind::Grass => [0.20, 0.48, 0.18],
+        BlockKind::Snow | BlockKind::ArtSnow => [0.86, 0.90, 1.0],
+        BlockKind::Earth => [0.38, 0.25, 0.14],
+        BlockKind::Sand => [0.78, 0.64, 0.38],
+        BlockKind::Wood => [0.42, 0.24, 0.10],
+        BlockKind::Leaves | BlockKind::ArtLeaves => [0.10, 0.36, 0.12],
+        BlockKind::GlowingMushroom => [0.68, 0.36, 1.0],
+        BlockKind::Ice => [0.48, 0.74, 1.0],
+        BlockKind::Misc => [0.58, 0.58, 0.62],
+    }
+}
+
+fn rgb8_to_unit(color: [u8; 3]) -> [f32; 3] {
+    [
+        color[0] as f32 / 255.0,
+        color[1] as f32 / 255.0,
+        color[2] as f32 / 255.0,
+    ]
+}
+
+fn blend_color(a: [f32; 3], b: [f32; 3], amount: f32) -> [f32; 3] {
+    let amount = amount.clamp(0.0, 1.0);
+    [
+        a[0] + (b[0] - a[0]) * amount,
+        a[1] + (b[1] - a[1]) * amount,
+        a[2] + (b[2] - a[2]) * amount,
+    ]
+}
+
+fn scale_color(color: [f32; 3], scale: f32) -> [f32; 3] {
+    color.map(|channel| (channel * scale).min(1.0))
 }
