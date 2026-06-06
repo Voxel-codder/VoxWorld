@@ -80,6 +80,8 @@ enum SessionMessage {
         username: String,
         in_game: bool,
         position: Option<[f32; 3]>,
+        health: Option<PlayerStat>,
+        energy: Option<PlayerStat>,
         players_online: Vec<String>,
         character_count: usize,
         entities: Vec<SnapshotEntity>,
@@ -100,6 +102,13 @@ struct SnapshotEntity {
     is_self: bool,
     position: [f32; 3],
     distance: f32,
+}
+
+#[derive(Debug, Serialize)]
+struct PlayerStat {
+    current: f32,
+    maximum: f32,
+    fraction: f32,
 }
 
 pub struct PlaySession {
@@ -349,15 +358,41 @@ fn send_snapshot(
         .map(|position| [position.x, position.y, position.z]);
     let players_online = client.players().map(str::to_owned).collect();
     let entities = snapshot_entities(client);
+    let (health, energy) = snapshot_player_stats(client);
 
     send_json(outbound, SessionMessage::Snapshot {
         username: username.to_owned(),
         in_game,
         position,
+        health,
+        energy,
         players_online,
         character_count: client.character_list().characters.len(),
         entities,
     });
+}
+
+fn snapshot_player_stats(client: &Client) -> (Option<PlayerStat>, Option<PlayerStat>) {
+    let ecs = client.state().ecs();
+    let entity = client.entity();
+    let health = ecs
+        .read_storage::<comp::Health>()
+        .get(entity)
+        .map(|health| PlayerStat {
+            current: health.current(),
+            maximum: health.maximum(),
+            fraction: health.fraction().clamp(0.0, 1.0),
+        });
+    let energy = ecs
+        .read_storage::<comp::Energy>()
+        .get(entity)
+        .map(|energy| PlayerStat {
+            current: energy.current(),
+            maximum: energy.maximum(),
+            fraction: energy.fraction().clamp(0.0, 1.0),
+        });
+
+    (health, energy)
 }
 
 fn snapshot_entities(client: &Client) -> Vec<SnapshotEntity> {

@@ -33,8 +33,17 @@ struct SnapshotView {
     username: String,
     in_game: bool,
     position: Option<[f64; 3]>,
+    health: Option<StatView>,
+    energy: Option<StatView>,
     players_online: u32,
     entities: Vec<EntityView>,
+}
+
+#[derive(Clone)]
+struct StatView {
+    current: f64,
+    maximum: f64,
+    fraction: f64,
 }
 
 #[derive(Clone)]
@@ -257,6 +266,8 @@ fn parse_snapshot(value: &JsValue) -> Option<SnapshotView> {
         .and_then(|players| players.dyn_into::<js_sys::Array>().ok())
         .map_or(0, |players| players.length());
     let position = array3_property(value, "position");
+    let health = stat_property(value, "health");
+    let energy = stat_property(value, "energy");
     let entities = Reflect::get(value, &JsValue::from_str("entities"))
         .ok()
         .and_then(|entities| entities.dyn_into::<js_sys::Array>().ok())
@@ -279,6 +290,8 @@ fn parse_snapshot(value: &JsValue) -> Option<SnapshotView> {
         username,
         in_game,
         position,
+        health,
+        energy,
         players_online,
         entities,
     })
@@ -297,10 +310,29 @@ fn array3_property(value: &JsValue, key: &str) -> Option<[f64; 3]> {
     ])
 }
 
+fn stat_property(value: &JsValue, key: &str) -> Option<StatView> {
+    let stat = Reflect::get(value, &JsValue::from_str(key)).ok()?;
+    if stat.is_null() || stat.is_undefined() {
+        return None;
+    }
+
+    Some(StatView {
+        current: number_property(&stat, "current")?,
+        maximum: number_property(&stat, "maximum")?,
+        fraction: number_property(&stat, "fraction")?.clamp(0.0, 1.0),
+    })
+}
+
 fn string_property(value: &JsValue, key: &str) -> Option<String> {
     Reflect::get(value, &JsValue::from_str(key))
         .ok()
         .and_then(|value| value.as_string())
+}
+
+fn number_property(value: &JsValue, key: &str) -> Option<f64> {
+    Reflect::get(value, &JsValue::from_str(key))
+        .ok()
+        .and_then(|value| value.as_f64())
 }
 
 fn bool_property(value: &JsValue, key: &str) -> bool {
@@ -884,6 +916,48 @@ fn draw_snapshot(
         ),
         28.0,
         62.0,
+    );
+
+    if let Some(health) = &snapshot.health {
+        draw_stat_bar(context, 28.0, 82.0, 184.0, "Health", health, "#d95f5f");
+    }
+
+    if let Some(energy) = &snapshot.energy {
+        draw_stat_bar(context, 28.0, 108.0, 184.0, "Energy", energy, "#d8b15f");
+    }
+}
+
+#[allow(deprecated)]
+fn draw_stat_bar(
+    context: &CanvasRenderingContext2d,
+    x: f64,
+    y: f64,
+    width: f64,
+    label: &str,
+    stat: &StatView,
+    color: &str,
+) {
+    let height = 12.0;
+    context.set_fill_style(&JsValue::from_str("rgba(0, 0, 0, 0.36)"));
+    context.fill_rect(x, y, width, height);
+
+    context.set_fill_style(&JsValue::from_str(color));
+    context.fill_rect(x, y, width * stat.fraction, height);
+
+    context.set_stroke_style(&JsValue::from_str("rgba(231, 247, 255, 0.34)"));
+    context.set_line_width(1.0);
+    context.stroke_rect(x, y, width, height);
+
+    context.set_fill_style(&JsValue::from_str("rgba(231, 247, 255, 0.86)"));
+    context.set_font("12px system-ui, sans-serif");
+    let _ = context.fill_text(
+        &format!(
+            "{label} {:.0}/{:.0}",
+            stat.current.max(0.0),
+            stat.maximum.max(0.0)
+        ),
+        x + width + 10.0,
+        y + 10.0,
     );
 }
 
