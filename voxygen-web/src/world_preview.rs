@@ -1,10 +1,16 @@
 use std::collections::HashMap;
 
 use common::{
-    comp::{Alignment, Body},
+    comp::{
+        Alignment, Body,
+        inventory::trade_pricing::TradePricing,
+        item::{Item, ItemDefinitionIdOwned, MaterialStatManifest, Quality},
+        tool::AbilityMap,
+    },
     generation::{EntityInfo, EntitySpawn, SpecialEntity},
     rtsim::{Profession, WorldSettings},
     terrain::{Block, BlockKind, SpriteKind, TerrainChunk, TerrainChunkSize, sprite::Category},
+    trade::{Good, SiteInformation, SitePrices},
     vol::{ReadVol, RectVolSize},
 };
 use rayon::ThreadPoolBuilder;
@@ -117,6 +123,7 @@ struct OriginalSiteMarker {
     kind: OriginalSiteMarkerKind,
     label: &'static str,
     site_name: String,
+    trade_preview: Option<TradePreview>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -126,6 +133,60 @@ enum OriginalSiteMarkerKind {
     Captain,
     Adventurer,
     Market,
+}
+
+struct TradePreview {
+    wares: Vec<TradePreviewItem>,
+    stock: Vec<(Good, f32)>,
+}
+
+struct TradePreviewItem {
+    name: String,
+    buy_coins: f32,
+    sell_coins: f32,
+    quality: Quality,
+}
+
+impl TradePreview {
+    fn summary(&self) -> String {
+        let stock = if self.stock.is_empty() {
+            "stock unavailable".to_owned()
+        } else {
+            format!(
+                "stock {}",
+                self.stock
+                    .iter()
+                    .map(|(good, amount)| format!("{good:?} {}", format_stock_amount(*amount)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let wares = if self.wares.is_empty() {
+            "no priced wares".to_owned()
+        } else {
+            format!(
+                "wares {}",
+                self.wares
+                    .iter()
+                    .map(TradePreviewItem::summary)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        format!("{stock}; {wares}")
+    }
+}
+
+impl TradePreviewItem {
+    fn summary(&self) -> String {
+        format!(
+            "{} {:?} buy {}c sell {}c",
+            self.name,
+            self.quality,
+            format_coin_price(self.buy_coins),
+            format_coin_price(self.sell_coins)
+        )
+    }
 }
 
 struct RtsimPreviewStats {
@@ -491,10 +552,18 @@ fn collect_site_markers(world: &World, index: IndexRef) -> Vec<OriginalSiteMarke
         .flat_map(|site_id| {
             let site = &index.sites[site_id];
             let site_name = site.name().unwrap_or("unnamed site").to_owned();
+            let site_prices = index.get_site_prices(site_id.id());
+            let site_information = site.trade_information(site_id);
             let mut markers = Vec::new();
 
             for plot in site.plots() {
                 if let Some((kind, label, tile)) = marker_from_service_plot(plot) {
+                    let trade_preview = trade_preview_for_marker(
+                        kind,
+                        label,
+                        site_prices.as_ref(),
+                        site_information.as_ref(),
+                    );
                     markers.push(site_marker_at_plot(
                         world.sim(),
                         site,
@@ -503,6 +572,7 @@ fn collect_site_markers(world: &World, index: IndexRef) -> Vec<OriginalSiteMarke
                         label,
                         tile,
                         Vec2::zero(),
+                        trade_preview,
                     ));
                 }
             }
@@ -532,6 +602,12 @@ fn collect_site_markers(world: &World, index: IndexRef) -> Vec<OriginalSiteMarke
                                 .unwrap_or_default()
                         });
                     let (kind, label) = marker_from_rtsim_profession(profession);
+                    let trade_preview = trade_preview_for_marker(
+                        kind,
+                        label,
+                        site_prices.as_ref(),
+                        site_information.as_ref(),
+                    );
                     markers.push(site_marker_at_plot(
                         world.sim(),
                         site,
@@ -540,6 +616,7 @@ fn collect_site_markers(world: &World, index: IndexRef) -> Vec<OriginalSiteMarke
                         label,
                         tile,
                         marker_offset(index),
+                        trade_preview,
                     ));
                 }
             }
@@ -557,6 +634,7 @@ fn site_marker_at_plot(
     label: &'static str,
     tile: Vec2<i32>,
     offset: Vec2<f32>,
+    trade_preview: Option<TradePreview>,
 ) -> OriginalSiteMarker {
     let wpos2d = site.tile_center_wpos(tile);
     OriginalSiteMarker {
@@ -568,6 +646,185 @@ fn site_marker_at_plot(
         kind,
         label,
         site_name: site_name.to_owned(),
+        trade_preview,
+    }
+}
+
+fn trade_preview_for_marker(
+    kind: OriginalSiteMarkerKind,
+    label: &'static str,
+    site_prices: Option<&SitePrices>,
+    site_information: Option<&SiteInformation>,
+) -> Option<TradePreview> {
+    if !matches!(
+        kind,
+        OriginalSiteMarkerKind::Trader | OriginalSiteMarkerKind::Market
+    ) {
+        return None;
+    }
+
+    let site_prices = site_prices?;
+    let stock = site_stock_summary(site_information, label);
+    let wares = trade_sample_items(label)
+        .iter()
+        .filter_map(|item_id| trade_preview_item(site_prices, item_id))
+        .take(3)
+        .collect::<Vec<_>>();
+
+    Some(TradePreview { wares, stock })
+}
+
+fn site_stock_summary(
+    site_information: Option<&SiteInformation>,
+    label: &'static str,
+) -> Vec<(Good, f32)> {
+    let mut goods = site_information
+        .map(|information| {
+            information
+                .unconsumed_stock
+                .iter()
+                .filter_map(|(good, amount)| {
+                    (*amount > 0.0 && trade_good_allowed(label, *good)).then_some((*good, *amount))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    goods.sort_by(|a, b| b.1.total_cmp(&a.1));
+    goods.truncate(3);
+    goods
+}
+
+fn trade_preview_item(site_prices: &SitePrices, item_id: &'static str) -> Option<TradePreviewItem> {
+    let item_definition_id = ItemDefinitionIdOwned::Simple(item_id.to_owned());
+    let materials = TradePricing::get_materials(&item_definition_id.as_ref())?;
+    let coin_price = site_prices
+        .values
+        .get(&Good::Coin)
+        .copied()
+        .unwrap_or(1.0)
+        .max(0.001);
+    let quality = Item::new_from_item_definition_id(
+        item_definition_id.as_ref(),
+        &AbilityMap::load().read(),
+        &MaterialStatManifest::load().read(),
+    )
+    .map_or(Quality::Low, |item| item.quality());
+    let buy_coins = materials
+        .iter()
+        .map(|(amount, good)| site_prices.values.get(good).copied().unwrap_or_default() * amount)
+        .sum::<f32>()
+        / coin_price;
+    let sell_coins = materials
+        .iter()
+        .map(|(amount, good)| {
+            site_prices.values.get(good).copied().unwrap_or_default()
+                * amount
+                * good.sell_discount(quality)
+        })
+        .sum::<f32>()
+        / coin_price;
+
+    Some(TradePreviewItem {
+        name: short_item_name(item_id),
+        buy_coins,
+        sell_coins,
+        quality,
+    })
+}
+
+fn trade_sample_items(label: &'static str) -> &'static [&'static str] {
+    match label {
+        "farmer" => &[
+            "common.items.food.apple",
+            "common.items.food.cheese",
+            "common.items.food.lettuce",
+        ],
+        "chef" | "tavern" => &[
+            "common.items.food.cheese",
+            "common.items.food.meat.fish_cooked",
+            "common.items.food.apple_mushroom_curry",
+        ],
+        "herbalist" | "alchemist" => &[
+            "common.items.consumable.potion_minor",
+            "common.items.crafting_ing.empty_vial",
+            "common.items.crafting_ing.honey",
+        ],
+        "blacksmith" | "workshop" => &[
+            "common.items.weapons.sword.starter",
+            "common.items.mineral.ore.iron",
+            "common.items.crafting_ing.stones",
+        ],
+        "hunter" => &[
+            "common.items.weapons.bow.starter",
+            "common.items.food.meat.beast_small_raw",
+            "common.items.log.wood",
+        ],
+        "board" | "merchant" => &[
+            "common.items.utility.coins",
+            "common.items.consumable.potion_minor",
+            "common.items.food.cheese",
+        ],
+        _ => &[
+            "common.items.utility.coins",
+            "common.items.food.cheese",
+            "common.items.consumable.potion_minor",
+        ],
+    }
+}
+
+fn trade_good_allowed(label: &'static str, good: Good) -> bool {
+    match label {
+        "farmer" | "chef" | "tavern" => matches!(good, Good::Food | Good::Coin),
+        "herbalist" | "alchemist" => matches!(
+            good,
+            Good::Potions | Good::Stone | Good::Wood | Good::Ingredients | Good::Coin
+        ),
+        "blacksmith" | "workshop" => matches!(good, Good::Armor | Good::Tools | Good::Coin),
+        "hunter" => matches!(good, Good::Tools | Good::Food | Good::Coin),
+        "board" => matches!(
+            good,
+            Good::Food
+                | Good::Potions
+                | Good::Stone
+                | Good::Wood
+                | Good::Ingredients
+                | Good::Tools
+                | Good::Armor
+                | Good::Coin
+                | Good::Recipe
+        ),
+        _ => !matches!(
+            good,
+            Good::Territory(_) | Good::Terrain(_) | Good::Transportation | Good::RoadSecurity
+        ),
+    }
+}
+
+fn short_item_name(item_id: &str) -> String {
+    item_id
+        .rsplit('.')
+        .next()
+        .unwrap_or(item_id)
+        .replace('_', " ")
+}
+
+fn format_coin_price(value: f32) -> String {
+    if value >= 100.0 {
+        format!("{value:.0}")
+    } else if value >= 10.0 {
+        format!("{value:.1}")
+    } else {
+        format!("{value:.2}")
+    }
+}
+
+fn format_stock_amount(value: f32) -> String {
+    if value >= 1_000_000.0 {
+        format!("{:.1}m", value / 1_000_000.0)
+    } else if value >= 1_000.0 {
+        format!("{:.1}k", value / 1_000.0)
+    } else {
+        format!("{value:.0}")
     }
 }
 
@@ -951,13 +1208,20 @@ struct SiteMarkerFocus<'a> {
 
 impl SiteMarkerFocus<'_> {
     fn summary(&self) -> String {
-        format!(
+        let mut summary = format!(
             "{} {} in {} at {:.1}m",
             site_marker_role_label(self.marker.kind),
             self.marker.label,
             self.marker.site_name,
             self.distance
-        )
+        );
+        if let Some(trade_preview) = &self.marker.trade_preview {
+            summary.push_str(&format!(
+                " (trade data: {} wares)",
+                trade_preview.wares.len()
+            ));
+        }
+        summary
     }
 
     fn action_summary(&self) -> String {
@@ -966,7 +1230,11 @@ impl SiteMarkerFocus<'_> {
             OriginalSiteMarkerKind::Captain | OriginalSiteMarkerKind::Adventurer => "talk preview",
             OriginalSiteMarkerKind::Guard => "talk guard",
         };
-        format!("{verb} {}", self.summary())
+        let mut summary = format!("{verb} {}", self.summary());
+        if let Some(trade_preview) = &self.marker.trade_preview {
+            summary.push_str(&format!("; {}", trade_preview.summary()));
+        }
+        summary
     }
 }
 
