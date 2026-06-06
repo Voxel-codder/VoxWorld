@@ -11,6 +11,7 @@ platform work can land without disturbing the production server or native client
 - WebSocket connection shell for the `/play` headless session transport
 - Static web page that can be hosted by any HTTP server
 - Same-origin `/play` connection default for Railway and local gateway hosting
+- Server status display includes active browser sessions against the web session cap
 - Keyboard input forwarding for WASD, E/Q vertical movement, Space jump, Shift roll, and basic combat keys
 - Mouse and touch look-direction forwarding from the canvas
 - Mouse primary and secondary action forwarding from the canvas

@@ -11,10 +11,10 @@
 
     <section class="touch-controls" aria-label="Touch controls">
       <div class="move-pad" aria-label="Movement">
-        <button id="touch-forward" class="touch-button touch-button-up" type="button" aria-label="Move forward">↑</button>
-        <button id="touch-left" class="touch-button touch-button-left" type="button" aria-label="Move left">←</button>
-        <button id="touch-back" class="touch-button touch-button-down" type="button" aria-label="Move back">↓</button>
-        <button id="touch-right" class="touch-button touch-button-right" type="button" aria-label="Move right">→</button>
+        <button id="touch-forward" class="touch-button touch-button-up" type="button" aria-label="Move forward">W</button>
+        <button id="touch-left" class="touch-button touch-button-left" type="button" aria-label="Move left">A</button>
+        <button id="touch-back" class="touch-button touch-button-down" type="button" aria-label="Move back">S</button>
+        <button id="touch-right" class="touch-button touch-button-right" type="button" aria-label="Move right">D</button>
       </div>
       <div class="action-pad" aria-label="Actions">
         <button id="touch-primary" class="touch-button touch-action-primary" type="button" aria-label="Primary action">Hit</button>
@@ -119,18 +119,25 @@
           const data = await response.json();
           const query = data.query_server?.result;
           const tcpReachable = Boolean(data.upstream?.tcp_reachable);
-          const reachable = Boolean(query?.ok || tcpReachable);
+          const webSessions = data.web_sessions || {};
+          const activeSessions = Number(webSessions.active || 0);
+          const maxSessions = Number(webSessions.max || 0);
+          const webFull = maxSessions > 0 && activeSessions >= maxSessions;
+          const sessionText = maxSessions > 0 ? ` | web ${activeSessions}/${maxSessions}` : "";
+          const reachable = Boolean((query?.ok || tcpReachable) && !webFull);
 
           if (connectButton) {
             connectButton.disabled = !reachable;
           }
 
-          if (query?.ok) {
-            summary.textContent = `${query.players}/${query.player_cap} online`;
+          if (webFull) {
+            summary.textContent = `Server full (${activeSessions}/${maxSessions} web sessions)`;
+          } else if (query?.ok) {
+            summary.textContent = `${query.players}/${query.player_cap} online${sessionText}`;
           } else if (tcpReachable) {
-            summary.textContent = "Server starting...";
+            summary.textContent = `Server starting...${sessionText}`;
           } else {
-            summary.textContent = "Server offline";
+            summary.textContent = `Server offline${sessionText}`;
           }
 
           if (reachable && wasmReady && !autoConnectAttempted) {
