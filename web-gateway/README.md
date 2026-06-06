@@ -40,6 +40,12 @@ The browser sends input messages such as:
 {"type":"input","move_x":0,"move_y":1,"move_z":0,"look_x":0,"look_y":1,"look_z":0}
 ```
 
+and chat messages such as:
+
+```json
+{"type":"chat","message":"hello"}
+```
+
 The gateway responds with stage, snapshot, event, and error messages. Snapshots
 currently include username, in-game state, position, online player names,
 character count, and up to 96 nearby entity positions. `/api/status` also

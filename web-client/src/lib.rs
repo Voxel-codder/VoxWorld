@@ -12,6 +12,7 @@ thread_local! {
     static SOCKET: RefCell<Option<WebSocket>> = const { RefCell::new(None) };
     static INPUT: RefCell<InputState> = const { RefCell::new(InputState::new()) };
     static LAST_SNAPSHOT: RefCell<Option<SnapshotView>> = const { RefCell::new(None) };
+    static CHAT_LOG: RefCell<Option<HtmlElement>> = const { RefCell::new(None) };
 }
 
 #[derive(Clone, Copy)]
@@ -84,13 +85,22 @@ pub fn start() -> Result<(), JsValue> {
     let status: HtmlElement = element_by_id(&document, "connection-status")?;
     let server_url: HtmlInputElement = element_by_id(&document, "server-url")?;
     let connect_button: HtmlButtonElement = element_by_id(&document, "connect-button")?;
+    let chat_log: HtmlElement = element_by_id(&document, "chat-log")?;
+    let chat_form: HtmlElement = element_by_id(&document, "chat-form")?;
+    let chat_input: HtmlInputElement = element_by_id(&document, "chat-input")?;
     let context = canvas_2d_context(&canvas)?;
+
+    CHAT_LOG.with(|slot| {
+        *slot.borrow_mut() = Some(chat_log);
+    });
 
     resize_canvas(&canvas)?;
     install_resize_handler(&window, canvas.clone())?;
     start_render_loop(&window, canvas, context)?;
-    install_connect_handler(connect_button, server_url, status)?;
+    install_connect_handler(connect_button, server_url, status.clone())?;
+    install_chat_handler(chat_form, chat_input, status)?;
     install_keyboard_handlers(&window)?;
+    append_chat_line("system", "Session log ready");
 
     Ok(())
 }
@@ -128,6 +138,7 @@ fn attach_socket_handlers(socket: &WebSocket, status: HtmlElement) {
     let open_status = status.clone();
     let on_open = Closure::<dyn FnMut(Event)>::new(move |_| {
         open_status.set_text_content(Some("Connected"));
+        append_chat_line("system", "Connected");
     });
     socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
     on_open.forget();
@@ -143,6 +154,7 @@ fn attach_socket_handlers(socket: &WebSocket, status: HtmlElement) {
     let error_status = status.clone();
     let on_error = Closure::<dyn FnMut(ErrorEvent)>::new(move |event: ErrorEvent| {
         error_status.set_text_content(Some("Connection error"));
+        append_chat_line("error", "Connection error");
         web_sys::console::error_1(&event.into());
     });
     socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
@@ -156,6 +168,7 @@ fn attach_socket_handlers(socket: &WebSocket, status: HtmlElement) {
             format!("Connection closed: {}", event.reason())
         };
         close_status.set_text_content(Some(&reason));
+        append_chat_line("system", &reason);
         SOCKET.with(|slot| {
             *slot.borrow_mut() = None;
         });
@@ -197,10 +210,12 @@ fn summarize_server_message(data: &JsValue) -> String {
         Some("error") => {
             let message =
                 string_property(&value, "message").unwrap_or_else(|| "unknown error".to_owned());
+            append_chat_line("error", &message);
             format!("Session error: {message}")
         },
         Some("event") => {
             let message = string_property(&value, "message").unwrap_or_else(|| "event".to_owned());
+            append_chat_line("event", &message);
             format!("Session event: {message}")
         },
         _ => "Session message received".to_owned(),
@@ -266,6 +281,110 @@ fn bool_property(value: &JsValue, key: &str) -> bool {
         .ok()
         .and_then(|value| value.as_bool())
         .unwrap_or(false)
+}
+
+fn install_chat_handler(
+    form: HtmlElement,
+    input: HtmlInputElement,
+    status: HtmlElement,
+) -> Result<(), JsValue> {
+    let on_submit = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+        event.prevent_default();
+        send_chat_message(&input, &status);
+    });
+
+    form.add_event_listener_with_callback("submit", on_submit.as_ref().unchecked_ref())?;
+    on_submit.forget();
+    Ok(())
+}
+
+fn send_chat_message(input: &HtmlInputElement, status: &HtmlElement) {
+    let message = input.value().trim().to_owned();
+    if message.is_empty() {
+        return;
+    }
+
+    let payload = format!(r#"{{"type":"chat","message":{}}}"#, json_string(&message));
+    let sent = SOCKET.with(|slot| {
+        let socket = slot.borrow();
+        let Some(socket) = socket.as_ref() else {
+            return false;
+        };
+        if socket.ready_state() != WebSocket::OPEN {
+            return false;
+        }
+        match socket.send_with_str(&payload) {
+            Ok(()) => true,
+            Err(error) => {
+                web_sys::console::error_1(&error);
+                false
+            },
+        }
+    });
+
+    if sent {
+        input.set_value("");
+        append_chat_line("outbound", &format!("You: {message}"));
+    } else {
+        status.set_text_content(Some("Chat unavailable"));
+        append_chat_line("error", "Chat unavailable");
+    }
+}
+
+fn json_string(value: &str) -> String {
+    let mut output = String::with_capacity(value.len() + 2);
+    output.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            '\u{08}' => output.push_str("\\b"),
+            '\u{0c}' => output.push_str("\\f"),
+            character if character < ' ' => {
+                output.push_str(&format!("\\u{:04x}", character as u32));
+            },
+            character => output.push(character),
+        }
+    }
+    output.push('"');
+    output
+}
+
+fn append_chat_line(kind: &str, text: &str) {
+    CHAT_LOG.with(|slot| {
+        let Some(log) = slot.borrow().as_ref().cloned() else {
+            return;
+        };
+        let Some(document) = log.owner_document() else {
+            return;
+        };
+        let Ok(line) = document.create_element("div") else {
+            return;
+        };
+
+        line.set_class_name(&format!("chat-line chat-line-{kind}"));
+        line.set_text_content(Some(text));
+
+        if let Err(error) = log.append_child(&line) {
+            web_sys::console::error_1(&error);
+            return;
+        }
+
+        while log.child_element_count() > 80 {
+            let Some(first) = log.first_element_child() else {
+                break;
+            };
+            if let Err(error) = log.remove_child(&first) {
+                web_sys::console::error_1(&error);
+                break;
+            }
+        }
+
+        log.set_scroll_top(log.scroll_height());
+    });
 }
 
 fn install_keyboard_handlers(window: &Window) -> Result<(), JsValue> {
@@ -407,11 +526,7 @@ fn draw_placeholder(context: &CanvasRenderingContext2d, width: f64, height: f64,
 
     context.set_fill_style(&JsValue::from_str("rgba(231, 247, 255, 0.72)"));
     context.set_font("15px system-ui, sans-serif");
-    let _ = context.fill_text(
-        "Headless session bridge online. Use WASD, Space, Shift.",
-        32.0,
-        76.0,
-    );
+    let _ = context.fill_text("Waiting for the world session...", 32.0, 76.0);
 }
 
 #[allow(deprecated)]

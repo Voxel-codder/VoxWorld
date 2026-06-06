@@ -14,6 +14,7 @@ platform work can land without disturbing the production server or native client
 - Keyboard input forwarding for WASD, Space, and Shift
 - Snapshot-driven canvas view for the player and nearby entities
 - Browser-persisted guest name passed through `/play?name=...`
+- Browser chat input and session event log over the `/play` transport
 
 ## Build
 

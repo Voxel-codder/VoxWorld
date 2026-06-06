@@ -33,6 +33,7 @@ features = [
     "HtmlInputElement",
     "KeyboardEvent",
     "MessageEvent",
+    "Node",
     "WebSocket",
     "Window",
     "console",

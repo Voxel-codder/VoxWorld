@@ -9,7 +9,7 @@
   <body>
     <canvas id="world-canvas" aria-label="Vox World web client canvas"></canvas>
 
-    <form class="connection-panel" onsubmit="return false">
+    <section class="connection-panel">
       <label for="player-name">Name</label>
       <div class="connection-row">
         <input id="player-name" autocomplete="nickname" maxlength="24" spellcheck="false" />
@@ -21,7 +21,18 @@
       </div>
       <p id="server-summary">Checking server...</p>
       <p id="connection-status">Not connected</p>
-    </form>
+      <div id="chat-log" class="chat-log" aria-live="polite"></div>
+      <form id="chat-form" class="chat-row" autocomplete="off">
+        <input
+          id="chat-input"
+          aria-label="Chat message"
+          maxlength="240"
+          placeholder="Message"
+          spellcheck="true"
+        />
+        <button type="submit">Send</button>
+      </form>
+    </section>
 
     <script type="module">
       import init from "./pkg/voxworld_web_client.js";
