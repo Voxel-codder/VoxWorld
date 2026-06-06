@@ -6,7 +6,9 @@ use std::{cell::RefCell, rc::Rc};
 use vek::Vec2;
 use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
 use web_sys::{Document, HtmlCanvasElement, KeyboardEvent, Window};
-use world_preview::{FLOATS_PER_VERTEX, OriginalWorldMesh, OriginalWorldPreview};
+use world_preview::{
+    FLOATS_PER_VERTEX, OriginalEntityMarker, OriginalWorldMesh, OriginalWorldPreview,
+};
 
 const CANVAS_ID: &str = "voxworld-canvas";
 const DETAIL_ID: &str = "voxworld-detail";
@@ -99,6 +101,12 @@ struct VoxygenWebClient {
     terrain_vertex_buffer: wgpu::Buffer,
     terrain_index_buffer: wgpu::Buffer,
     terrain_index_count: u32,
+    entity_marker_vertex_buffer: wgpu::Buffer,
+    entity_marker_index_buffer: wgpu::Buffer,
+    entity_marker_index_count: u32,
+    player_marker_vertex_buffer: wgpu::Buffer,
+    player_marker_index_buffer: wgpu::Buffer,
+    player_marker_index_count: u32,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     world_preview: OriginalWorldPreview,
@@ -266,6 +274,12 @@ impl VoxygenWebClient {
             .len()
             .try_into()
             .map_err(|_| "terrain index count overflowed u32".to_owned())?;
+        let (entity_marker_vertex_buffer, entity_marker_index_buffer, entity_marker_index_count) =
+            create_marker_buffers(&device, &world_mesh.entity_markers, "Entity");
+        let player_marker =
+            player_marker(world_preview.player_render_position(player_wpos, center_chunk_pos));
+        let (player_marker_vertex_buffer, player_marker_index_buffer, player_marker_index_count) =
+            create_marker_buffers(&device, &[player_marker], "Player");
 
         Ok(Self {
             _canvas: canvas,
@@ -278,6 +292,12 @@ impl VoxygenWebClient {
             terrain_vertex_buffer,
             terrain_index_buffer,
             terrain_index_count,
+            entity_marker_vertex_buffer,
+            entity_marker_index_buffer,
+            entity_marker_index_count,
+            player_marker_vertex_buffer,
+            player_marker_index_buffer,
+            player_marker_index_count,
             camera_buffer,
             camera_bind_group,
             world_preview,
@@ -397,6 +417,20 @@ impl VoxygenWebClient {
                 wgpu::IndexFormat::Uint32,
             );
             render_pass.draw_indexed(0..self.terrain_index_count, 0, 0..1);
+
+            render_pass.set_vertex_buffer(0, self.entity_marker_vertex_buffer.slice(..));
+            render_pass.set_index_buffer(
+                self.entity_marker_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            render_pass.draw_indexed(0..self.entity_marker_index_count, 0, 0..1);
+
+            render_pass.set_vertex_buffer(0, self.player_marker_vertex_buffer.slice(..));
+            render_pass.set_index_buffer(
+                self.player_marker_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            render_pass.draw_indexed(0..self.player_marker_index_count, 0, 0..1);
         }
 
         self.queue.submit(Some(encoder.finish()));
@@ -421,10 +455,15 @@ impl VoxygenWebClient {
             .len()
             .try_into()
             .map_err(|_| "terrain index count overflowed u32".to_owned())?;
+        let (entity_marker_vertex_buffer, entity_marker_index_buffer, entity_marker_index_count) =
+            create_marker_buffers(&self.device, &world_mesh.entity_markers, "Entity");
 
         self.terrain_vertex_buffer = terrain_vertex_buffer;
         self.terrain_index_buffer = terrain_index_buffer;
         self.terrain_index_count = terrain_index_count;
+        self.entity_marker_vertex_buffer = entity_marker_vertex_buffer;
+        self.entity_marker_index_buffer = entity_marker_index_buffer;
+        self.entity_marker_index_count = entity_marker_index_count;
         self.world_mesh = world_mesh;
         Ok(())
     }
@@ -457,6 +496,7 @@ impl VoxygenWebClient {
         }
 
         self.update_camera();
+        self.update_player_marker();
         self.render_frame();
         set_status("Original WorldSim terrain is rendering.", StatusState::Ok);
         set_detail(&self.scene_summary());
@@ -473,14 +513,26 @@ impl VoxygenWebClient {
             .write_buffer(&self.camera_buffer, 0, &matrix_bytes(&camera_matrix));
     }
 
+    fn update_player_marker(&mut self) {
+        let player_render_pos = self
+            .world_preview
+            .player_render_position(self.player.wpos, self.player.center_chunk_pos);
+        let marker = player_marker(player_render_pos);
+        let (vertex_buffer, index_buffer, index_count) =
+            create_marker_buffers(&self.device, &[marker], "Player");
+        self.player_marker_vertex_buffer = vertex_buffer;
+        self.player_marker_index_buffer = index_buffer;
+        self.player_marker_index_count = index_count;
+    }
+
     fn scene_summary(&self) -> String {
         let (chunks_x, chunks_y) = self.world_mesh.chunk_dimensions;
         let (patch_x, patch_y) = self.world_mesh.chunk_patch;
         format!(
             "Seed {} generated {} original TerrainChunks in a {}x{} patch around {:?} inside a \
              {}x{} WorldSim. Player block position: ({:.1}, {:.1}). WebGPU block faces: {}. \
-             Filled blocks: {}. Liquid blocks: {}. Entity spawns: {}. World features loaded: {}. \
-             Wildlife spawn manifests: {}.",
+             Filled blocks: {}. Liquid blocks: {}. Visible entity markers: {}. Entity spawns: {}. \
+             World features loaded: {}. Wildlife spawn manifests: {}.",
             self.world_mesh.seed,
             self.world_mesh.generated_chunks,
             patch_x,
@@ -493,6 +545,7 @@ impl VoxygenWebClient {
             self.world_mesh.terrain_faces,
             self.world_mesh.filled_blocks,
             self.world_mesh.liquid_blocks,
+            self.world_mesh.entity_markers.len(),
             self.world_mesh.generated_entity_spawns,
             self.world_mesh.enabled_world_features,
             self.world_mesh.wildlife_spawn_manifests
@@ -606,6 +659,100 @@ fn create_buffer_with_data(
     }
     buffer.unmap();
     buffer
+}
+
+fn create_marker_buffers(
+    device: &wgpu::Device,
+    markers: &[OriginalEntityMarker],
+    label_prefix: &'static str,
+) -> (wgpu::Buffer, wgpu::Buffer, u32) {
+    let (vertices, indices) = marker_mesh(markers);
+    let vertex_buffer = create_buffer_with_data(
+        device,
+        &f32_bytes(&vertices),
+        wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        marker_buffer_label(label_prefix, "Vertex"),
+    );
+    let index_buffer = create_buffer_with_data(
+        device,
+        &u32_bytes(&indices),
+        wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        marker_buffer_label(label_prefix, "Index"),
+    );
+    (vertex_buffer, index_buffer, indices.len() as u32)
+}
+
+fn marker_buffer_label(prefix: &'static str, kind: &'static str) -> &'static str {
+    match (prefix, kind) {
+        ("Player", "Vertex") => "Voxygen Web Player Marker Vertex Buffer",
+        ("Player", "Index") => "Voxygen Web Player Marker Index Buffer",
+        ("Entity", "Vertex") => "Voxygen Web Entity Marker Vertex Buffer",
+        ("Entity", "Index") => "Voxygen Web Entity Marker Index Buffer",
+        _ => "Voxygen Web Marker Buffer",
+    }
+}
+
+fn player_marker(render_pos: [f32; 3]) -> OriginalEntityMarker {
+    OriginalEntityMarker {
+        render_pos: [render_pos[0], render_pos[1] + 2.2, render_pos[2]],
+        radius: 0.62,
+        height: 2.25,
+        color: [1.0, 0.96, 0.22],
+    }
+}
+
+fn marker_mesh(markers: &[OriginalEntityMarker]) -> (Vec<f32>, Vec<u32>) {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for marker in markers {
+        add_marker_box(&mut vertices, &mut indices, *marker);
+    }
+    (vertices, indices)
+}
+
+fn add_marker_box(vertices: &mut Vec<f32>, indices: &mut Vec<u32>, marker: OriginalEntityMarker) {
+    let [x, y, z] = marker.render_pos;
+    let r = marker.radius;
+    let y0 = y;
+    let y1 = y + marker.height;
+    let corners = [
+        [x - r, y0, z - r],
+        [x + r, y0, z - r],
+        [x + r, y0, z + r],
+        [x - r, y0, z + r],
+        [x - r, y1, z - r],
+        [x + r, y1, z - r],
+        [x + r, y1, z + r],
+        [x - r, y1, z + r],
+    ];
+    const FACES: [[usize; 4]; 6] = [
+        [0, 1, 2, 3],
+        [4, 7, 6, 5],
+        [0, 4, 5, 1],
+        [1, 5, 6, 2],
+        [2, 6, 7, 3],
+        [3, 7, 4, 0],
+    ];
+
+    for (face_index, face) in FACES.iter().enumerate() {
+        let base = (vertices.len() / FLOATS_PER_VERTEX) as u32;
+        let color = shade_marker_color(marker.color, face_index);
+        for corner_index in face {
+            let [vx, vy, vz] = corners[*corner_index];
+            vertices.extend_from_slice(&[vx, vy, vz, color[0], color[1], color[2]]);
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+}
+
+fn shade_marker_color(color: [f32; 3], face_index: usize) -> [f32; 3] {
+    let shade = match face_index {
+        1 => 1.12,
+        0 => 0.58,
+        2 | 3 => 0.88,
+        _ => 0.74,
+    };
+    color.map(|channel| (channel * shade).min(1.0))
 }
 
 fn camera_view_projection(

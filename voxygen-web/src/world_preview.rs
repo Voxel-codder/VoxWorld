@@ -1,4 +1,6 @@
 use common::{
+    comp::{Alignment, Body},
+    generation::{EntityInfo, EntitySpawn, SpecialEntity},
     spot::Spot,
     terrain::{Block, TerrainChunk, TerrainChunkSize},
     vol::{ReadVol, RectVolSize},
@@ -32,6 +34,7 @@ pub struct OriginalWorldPreview {
 pub struct OriginalWorldMesh {
     pub vertices: Vec<f32>,
     pub indices: Vec<u32>,
+    pub entity_markers: Vec<OriginalEntityMarker>,
     pub chunk_dimensions: (u32, u32),
     pub center_chunk_pos: (i32, i32),
     pub chunk_patch: (u32, u32),
@@ -43,6 +46,14 @@ pub struct OriginalWorldMesh {
     pub enabled_world_features: usize,
     pub wildlife_spawn_manifests: usize,
     pub seed: u32,
+}
+
+#[derive(Clone, Copy)]
+pub struct OriginalEntityMarker {
+    pub render_pos: [f32; 3],
+    pub radius: f32,
+    pub height: f32,
+    pub color: [f32; 3],
 }
 
 impl OriginalWorldPreview {
@@ -167,7 +178,7 @@ impl OriginalWorldPreview {
                 preview_chunks.push(GeneratedPreviewChunk {
                     pos: chunk_pos,
                     chunk: terrain_chunk,
-                    entity_spawns: supplement.entity_spawns.len(),
+                    entity_spawns: supplement.entity_spawns,
                 });
             }
         }
@@ -209,7 +220,7 @@ fn terrain_chunk_preview_features(features: &Features) -> Features {
 struct GeneratedPreviewChunk {
     pos: Vec2<i32>,
     chunk: TerrainChunk,
-    entity_spawns: usize,
+    entity_spawns: Vec<EntitySpawn>,
 }
 
 fn mesh_from_terrain_chunks(
@@ -245,9 +256,17 @@ fn mesh_from_terrain_chunks(
     let mut filled_blocks = 0usize;
     let mut liquid_blocks = 0usize;
     let mut generated_entity_spawns = 0usize;
+    let mut entity_markers = Vec::new();
+    let vertical_origin = (min_z + max_z) as f32 * 0.5;
 
     for preview_chunk in chunks {
-        generated_entity_spawns += preview_chunk.entity_spawns;
+        generated_entity_spawns += count_entity_spawns(&preview_chunk.entity_spawns);
+        append_entity_markers(
+            &preview_chunk.entity_spawns,
+            center_chunk_pos,
+            vertical_origin,
+            &mut entity_markers,
+        );
         let chunk_origin = relative_chunk_origin(preview_chunk.pos, center_chunk_pos);
         for (pos, block) in preview_chunk.chunk.iter_changed() {
             let renderable = block.is_filled() || block.is_liquid();
@@ -276,6 +295,7 @@ fn mesh_from_terrain_chunks(
     Ok(OriginalWorldMesh {
         vertices: builder.vertices,
         indices: builder.indices,
+        entity_markers,
         chunk_dimensions: (dimensions.x, dimensions.y),
         center_chunk_pos: (center_chunk_pos.x, center_chunk_pos.y),
         chunk_patch: (patch_side, patch_side),
@@ -288,6 +308,96 @@ fn mesh_from_terrain_chunks(
         wildlife_spawn_manifests,
         seed,
     })
+}
+
+fn count_entity_spawns(entity_spawns: &[EntitySpawn]) -> usize {
+    entity_spawns
+        .iter()
+        .map(|entity_spawn| match entity_spawn {
+            EntitySpawn::Entity(_) => 1,
+            EntitySpawn::Group(group) => group.len(),
+        })
+        .sum()
+}
+
+fn append_entity_markers(
+    entity_spawns: &[EntitySpawn],
+    center_chunk_pos: Vec2<i32>,
+    vertical_origin: f32,
+    entity_markers: &mut Vec<OriginalEntityMarker>,
+) {
+    for entity_spawn in entity_spawns {
+        match entity_spawn {
+            EntitySpawn::Entity(entity) => {
+                entity_markers.push(entity_marker(entity, center_chunk_pos, vertical_origin));
+            },
+            EntitySpawn::Group(group) => {
+                entity_markers.extend(
+                    group
+                        .iter()
+                        .map(|entity| entity_marker(entity, center_chunk_pos, vertical_origin)),
+                );
+            },
+        }
+    }
+}
+
+fn entity_marker(
+    entity: &EntityInfo,
+    center_chunk_pos: Vec2<i32>,
+    vertical_origin: f32,
+) -> OriginalEntityMarker {
+    let center = chunk_center_wpos(center_chunk_pos);
+    let render_pos = [
+        (entity.pos.x - center.x) * TERRAIN_HORIZONTAL_SCALE,
+        (entity.pos.z - vertical_origin) * 0.28 + 0.25,
+        (entity.pos.y - center.y) * TERRAIN_HORIZONTAL_SCALE,
+    ];
+    let (radius, height) = entity_marker_size(&entity.body, entity.scale);
+    OriginalEntityMarker {
+        render_pos,
+        radius,
+        height,
+        color: entity_marker_color(entity),
+    }
+}
+
+fn entity_marker_size(body: &Body, scale: f32) -> (f32, f32) {
+    let (radius, height) = match body {
+        Body::Humanoid(_) => (0.34, 1.45),
+        Body::QuadrupedSmall(_) | Body::BipedSmall(_) | Body::FishSmall(_) => (0.28, 0.82),
+        Body::QuadrupedMedium(_) | Body::QuadrupedLow(_) | Body::Theropod(_) => (0.48, 1.05),
+        Body::BipedLarge(_) | Body::Golem(_) => (0.68, 1.85),
+        Body::Dragon(_) => (1.15, 2.25),
+        Body::BirdMedium(_) | Body::BirdLarge(_) => (0.42, 0.9),
+        Body::FishMedium(_) | Body::Crustacean(_) | Body::Arthropod(_) => (0.34, 0.72),
+        Body::Object(_) | Body::Item(_) => (0.24, 0.48),
+        Body::Ship(_) => (1.35, 1.1),
+        Body::Plugin(_) => (0.42, 1.0),
+    };
+    let scale = scale.clamp(0.4, 3.0);
+    (radius * scale, height * scale)
+}
+
+fn entity_marker_color(entity: &EntityInfo) -> [f32; 3] {
+    if entity.trading_information.is_some() {
+        return [1.0, 0.78, 0.18];
+    }
+    if let Some(special_entity) = &entity.special_entity {
+        return match special_entity {
+            SpecialEntity::Waypoint => [0.38, 0.78, 1.0],
+            SpecialEntity::Teleporter(_) => [0.82, 0.42, 1.0],
+            SpecialEntity::ArenaTotem { .. } => [1.0, 0.35, 0.26],
+        };
+    }
+
+    match entity.alignment {
+        Alignment::Enemy => [1.0, 0.18, 0.16],
+        Alignment::Npc => [0.24, 0.48, 1.0],
+        Alignment::Tame | Alignment::Owned(_) => [0.30, 0.92, 0.42],
+        Alignment::Passive => [0.72, 0.76, 0.82],
+        Alignment::Wild => [1.0, 0.56, 0.18],
+    }
 }
 
 fn relative_chunk_origin(chunk_pos: Vec2<i32>, center_chunk_pos: Vec2<i32>) -> Vec2<i32> {
