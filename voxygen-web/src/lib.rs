@@ -980,12 +980,13 @@ impl VoxygenWebClient {
         format!(
             "Seed {} {}. Rendered {} original TerrainChunks in a {}x{} patch around {:?} inside a \
              {}x{} WorldSim. Original sites/settlements/POIs: {}/{}/{}. New chunks/meshes this \
-             update: {}/{}. Chunk/mesh cache: {}/{}. GPU chunk buffers: {}/{}. Player block \
-             position: ({:.1}, {:.1}). Player terrain z: {:.1}. Player facing: {:.0} deg. Blocked \
-             terrain moves: {}. WebGPU block faces: {}. Filled blocks: {}. Liquid blocks: {}. \
-             Terrain sprite props: {}. Visible entity markers: {}. Entity spawns: {}. Rtsim \
-             sites/existing/wanted: {}/{}/{} (merchants {}, guards {}). Site NPC/trader/market \
-             markers: {}/{}/{}. World features loaded: {}. Wildlife spawn manifests: {}. {}{}",
+             update: {}/{}. Chunk/mesh cache: {}/{} retained within radius {} (evicted {}). GPU \
+             chunk buffers: {}/{}. Player block position: ({:.1}, {:.1}). Player terrain z: \
+             {:.1}. Player facing: {:.0} deg. Blocked terrain moves: {}. WebGPU block faces: {}. \
+             Filled blocks: {}. Liquid blocks: {}. Terrain sprite props: {}. Visible entity \
+             markers: {}. Entity spawns: {}. Rtsim sites/existing/wanted: {}/{}/{} (merchants {}, \
+             guards {}). Site NPC/trader/market markers: {}/{}/{}. World features loaded: {}. \
+             Wildlife spawn manifests: {}. {}{}",
             self.world_mesh.seed,
             self.world_preview.start_summary(),
             self.world_mesh.generated_chunks,
@@ -1001,6 +1002,8 @@ impl VoxygenWebClient {
             self.world_mesh.newly_meshed_chunks,
             self.world_mesh.cached_chunks,
             self.world_mesh.cached_mesh_chunks,
+            self.world_mesh.chunk_cache_retain_radius,
+            self.world_mesh.evicted_cached_chunks,
             self.visible_terrain_chunks.len(),
             self.terrain_chunk_buffers.len(),
             self.player.wpos.x,
@@ -1154,6 +1157,7 @@ fn sync_terrain_chunk_buffers(
         }
         visible_chunks.push(key);
     }
+    cache.retain(|key, _| visible_chunks.contains(key));
     Ok(visible_chunks)
 }
 

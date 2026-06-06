@@ -29,6 +29,7 @@ pub const TERRAIN_HORIZONTAL_SCALE: f32 = 0.64;
 const SEED: u32 = 7;
 const MAP_LG: u32 = 5;
 const CHUNK_RADIUS: i32 = 2;
+const CHUNK_CACHE_RETAIN_RADIUS: i32 = CHUNK_RADIUS + 1;
 const TERRAIN_INTERACTION_RANGE_BLOCKS: f32 = 5.0;
 const ENTITY_INTERACTION_RANGE_BLOCKS: f32 = 14.0;
 
@@ -65,6 +66,8 @@ pub struct OriginalWorldMesh {
     pub cached_chunks: usize,
     pub newly_meshed_chunks: usize,
     pub cached_mesh_chunks: usize,
+    pub evicted_cached_chunks: usize,
+    pub chunk_cache_retain_radius: i32,
     pub terrain_faces: usize,
     pub filled_blocks: usize,
     pub liquid_blocks: usize,
@@ -445,6 +448,10 @@ impl OriginalWorldPreview {
             newly_generated_chunks += 1;
         }
 
+        let evicted_cached_chunks =
+            self.evict_distant_cached_chunks(center_chunk_pos, CHUNK_CACHE_RETAIN_RADIUS);
+        let cached_chunks = self.chunk_cache.len();
+
         let preview_chunks = required_chunk_positions
             .iter()
             .filter_map(|chunk_pos| self.chunk_cache.get(&chunk_key(*chunk_pos)))
@@ -456,7 +463,9 @@ impl OriginalWorldPreview {
             center_chunk_pos,
             CHUNK_RADIUS,
             newly_generated_chunks,
-            self.chunk_cache.len(),
+            cached_chunks,
+            evicted_cached_chunks,
+            CHUNK_CACHE_RETAIN_RADIUS,
             self.seed,
             self.enabled_world_features,
             self.wildlife_spawn_manifests,
@@ -470,6 +479,18 @@ impl OriginalWorldPreview {
             self.rtsim_wanted_guards,
             &self.site_markers,
         )
+    }
+
+    fn evict_distant_cached_chunks(
+        &mut self,
+        center_chunk_pos: Vec2<i32>,
+        retain_radius: i32,
+    ) -> usize {
+        let before = self.chunk_cache.len();
+        self.chunk_cache.retain(|_, chunk| {
+            chunk_within_retention_radius(chunk.pos, center_chunk_pos, retain_radius)
+        });
+        before - self.chunk_cache.len()
     }
 
     pub fn interaction_summary(&self, player_wpos: Vec2<f32>) -> String {
@@ -527,6 +548,17 @@ fn required_chunk_positions(center_chunk_pos: Vec2<i32>, dimensions: Vec2<u32>) 
         }
     }
     chunk_positions
+}
+
+fn chunk_within_retention_radius(
+    chunk_pos: Vec2<i32>,
+    center_chunk_pos: Vec2<i32>,
+    retain_radius: i32,
+) -> bool {
+    (chunk_pos.x - center_chunk_pos.x)
+        .abs()
+        .max((chunk_pos.y - center_chunk_pos.y).abs())
+        <= retain_radius
 }
 
 fn select_preview_start(
@@ -1478,6 +1510,8 @@ fn mesh_from_terrain_chunks(
     chunk_radius: i32,
     newly_generated_chunks: usize,
     cached_chunks: usize,
+    evicted_cached_chunks: usize,
+    chunk_cache_retain_radius: i32,
     seed: u32,
     enabled_world_features: usize,
     wildlife_spawn_manifests: usize,
@@ -1570,6 +1604,8 @@ fn mesh_from_terrain_chunks(
         cached_chunks,
         newly_meshed_chunks: newly_generated_chunks,
         cached_mesh_chunks: cached_chunks,
+        evicted_cached_chunks,
+        chunk_cache_retain_radius,
         terrain_faces: builder.face_count,
         filled_blocks,
         liquid_blocks,

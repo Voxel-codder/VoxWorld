@@ -34,6 +34,10 @@ Current milestone:
   newly visible chunks and meshes;
 - upload visible terrain as per-chunk WebGPU vertex/index buffers and cache
   those buffers across chunk-boundary movement;
+- evict generated chunk/mesh fragments outside a small player-centered
+  retention radius and drop WebGPU terrain buffers for chunks that are no
+  longer visible, keeping the browser preview on a bounded streaming path
+  instead of accumulating every visited chunk;
 - track a browser-side player block position with continuous keyboard movement,
   update the camera every animation frame, and upload a regenerated terrain
   patch when the player crosses a chunk boundary;
@@ -111,9 +115,9 @@ Next milestones:
   state;
 - replace the browser-side committed-trade preview panel with the real Voxygen
   trade HUD and server-authoritative trade actions against live inventories;
-- replace the visible 5x5 GPU chunk-buffer set with fully streamed loading,
-  eviction, and independent chunk draw management around the live player
-  position;
+- expand the bounded 5x5 chunk-streaming path into Voxygen's full terrain
+  loading scheduler with predictive prefetch and independent draw management
+  around the live player position;
 - attach player/session state so the scene follows the live character instead
   of a fixed terrain camera;
 - introduce a browser-safe client transport that maps Voxygen networking onto a
