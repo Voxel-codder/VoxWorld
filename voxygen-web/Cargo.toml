@@ -13,8 +13,11 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 console_error_panic_hook = "0.1"
 js-sys = "0.3"
+rayon = { workspace = true }
+vek = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+veloren_world = { package = "veloren-world", path = "../world" }
 wgpu = { version = "27", default-features = false, features = [
     "std",
     "wgsl",

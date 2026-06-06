@@ -56,6 +56,7 @@ roots = "0.0.8"
 spin_sleep = "1.0"
 tracing = { workspace = true }
 uuid = { version = "1.4.1", default-features = false, features = [
+    "rng-getrandom",
     "serde",
     "v4",
 ] }
@@ -87,6 +88,13 @@ specs = { workspace = true, features = [
     "storage-event-control",
     "shred-derive",
 ] }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+# These aliases are intentionally unused by common code. They unify feature
+# flags for transitive getrandom versions when original common/world/client
+# systems are compiled into the browser client.
+getrandom03 = { package = "getrandom", version = "0.3.4", features = ["wasm_js"] }
+getrandom04 = { package = "getrandom", version = "0.4.1", features = ["wasm_js"] }
 
 [dev-dependencies]
 #bench

@@ -15,6 +15,13 @@ rustflags = [
     "-C", "link-arg=-lpsapi",
 ]
 
+[target.wasm32-unknown-unknown]
+rustflags = [
+    # Required once original common/world/client crates are pulled into the
+    # browser build path. It lets getrandom use the Web Crypto API.
+    "--cfg", 'getrandom_backend="wasm_js"',
+]
+
 # Clever way to get workspace dir, from https://github.com/rust-lang/cargo/issues/3946#issuecomment-973132993
 [env]
 CARGO_WORKSPACE_DIR = { value = "", relative = true }

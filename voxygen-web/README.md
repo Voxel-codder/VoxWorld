@@ -10,12 +10,19 @@ keeping the native client intact.
 
 Current milestone:
 
-- boot a browser canvas through the same WebGPU family used by Voxygen;
+- compile the original `common` and `world` crates for `wasm32-unknown-unknown`;
+- generate a small original `WorldSim` in the browser build path;
+- render that original chunk simulation as a WebGPU 3D terrain mesh with a
+  camera, vertex/index buffers, and depth testing;
 - keep this as the stable place for future Voxygen renderer/HUD migration;
 - avoid extending the temporary 2D canvas client as if it were the final game.
 
 Next milestones:
 
+- replace the WorldSim overview mesh with Voxygen's real terrain chunk/block
+  meshing path;
+- attach player/session state so the scene follows the live character instead
+  of a fixed terrain camera;
 - introduce a browser-safe client transport that maps Voxygen networking onto a
   WebSocket/WebTransport gateway;
 - split native-only Voxygen modules such as desktop audio, filesystem dialogs,

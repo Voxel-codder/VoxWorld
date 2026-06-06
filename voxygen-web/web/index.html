@@ -10,7 +10,7 @@
     <canvas id="voxworld-canvas" aria-label="Vox World Voxygen Web canvas"></canvas>
     <aside class="boot-panel" aria-live="polite">
       <div class="boot-title">Vox World</div>
-      <div class="boot-subtitle">Voxygen WebGPU bootstrap</div>
+      <div class="boot-subtitle">Original WorldSim terrain</div>
       <div id="voxworld-status" class="status status-loading">Loading Voxygen Web...</div>
       <div id="voxworld-detail" class="detail">Preparing browser runtime...</div>
     </aside>
@@ -21,7 +21,7 @@
         const detail = document.getElementById("voxworld-detail");
         if (status) {
           status.className = "status status-error";
-          status.textContent = "Voxygen WebGPU bootstrap failed.";
+          status.textContent = "Voxygen web scene failed.";
         }
         if (detail) {
           detail.textContent = error instanceof Error ? error.message : String(error);

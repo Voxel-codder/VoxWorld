@@ -2937,11 +2937,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "139ef39800118c7683f2fd3c98c1b23c09ae076556b435f8e9064ae108aaeeec"
 dependencies = [
  "cfg-if 1.0.4",
+ "js-sys",
  "libc",
  "r-efi",
  "rand_core 0.10.0",
  "wasip2",
  "wasip3",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -8547,7 +8549,17 @@ dependencies = [
  "getrandom 0.3.4",
  "js-sys",
  "serde_core",
+ "uuid-rng-internal",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "uuid-rng-internal"
+version = "1.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58e332a80046a2cf8832852d3e747b6eb83d8f168c250044a9d3563ab8ae81d4"
+dependencies = [
+ "getrandom 0.4.1",
 ]
 
 [[package]]
@@ -8664,6 +8676,8 @@ dependencies = [
  "enum-map",
  "enumset",
  "fxhash",
+ "getrandom 0.3.4",
+ "getrandom 0.4.1",
  "hashbrown 0.16.0",
  "indexmap 2.12.0",
  "itertools 0.14.0",
@@ -9220,6 +9234,9 @@ version = "0.18.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
+ "rayon",
+ "vek 0.17.2",
+ "veloren-world",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
