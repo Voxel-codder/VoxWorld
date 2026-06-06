@@ -20,7 +20,7 @@ Current milestone:
   spot structures in the generated preview chunk;
 - keep the generated original `World` and index data alive in the browser so
   new terrain patches can be generated without rebuilding the whole simulation;
-- call the real `World::generate_chunk` path for a 3x3 patch around the preview
+- call the real `World::generate_chunk` path for a 5x5 patch around the preview
   camera and convert the generated `TerrainChunk` blocks into a merged WebGPU
   3D block-face mesh with a camera, vertex/index buffers, and depth testing;
 - track a browser-side player block position with continuous keyboard movement,
@@ -42,7 +42,7 @@ Next milestones:
   and atlas/material pipeline;
 - replace entity and player temporary silhouettes with Voxygen body meshes,
   loadouts, and animation state;
-- replace the regenerated 3x3 patch with incremental chunk streaming around the
+- replace the regenerated 5x5 patch with incremental chunk streaming around the
   live player position;
 - attach player/session state so the scene follows the live character instead
   of a fixed terrain camera;

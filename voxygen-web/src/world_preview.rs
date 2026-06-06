@@ -19,7 +19,7 @@ pub const FLOATS_PER_VERTEX: usize = 6;
 pub const TERRAIN_HORIZONTAL_SCALE: f32 = 0.64;
 const SEED: u32 = 7;
 const MAP_LG: u32 = 5;
-const CHUNK_RADIUS: i32 = 1;
+const CHUNK_RADIUS: i32 = 2;
 
 pub struct OriginalWorldPreview {
     world: World,
