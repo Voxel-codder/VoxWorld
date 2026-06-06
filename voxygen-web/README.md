@@ -31,6 +31,9 @@ Current milestone:
 - track a browser-side player block position with continuous keyboard movement,
   update the camera every animation frame, and upload a regenerated terrain
   patch when the player crosses a chunk boundary;
+- ground the browser-side player marker and camera target using cached original
+  `TerrainChunk::find_accessible_pos` samples instead of only approximate
+  `WorldSim` surface altitude;
 - frame the WebGPU scene with a player-following third-person camera instead
   of the earlier far-away terrain-preview view;
 - convert original `ChunkSupplement.entity_spawns` into visible 3D markers and

@@ -174,13 +174,19 @@ impl OriginalWorldPreview {
     ) -> [f32; 3] {
         let center = chunk_center_wpos(center_chunk_pos);
         let delta = player_wpos - center;
-        let sample_wpos = Vec2::new(player_wpos.x.floor() as i32, player_wpos.y.floor() as i32);
-        let surface_alt = self.world.sim().get_surface_alt_approx(sample_wpos);
+        let terrain_z = self.player_terrain_z(player_wpos);
         [
             delta.x * TERRAIN_HORIZONTAL_SCALE,
-            (surface_alt - vertical_origin) * 0.28 + 0.25,
+            (terrain_z - vertical_origin) * 0.28 + 0.25,
             delta.y * TERRAIN_HORIZONTAL_SCALE,
         ]
+    }
+
+    pub fn player_terrain_z(&self, player_wpos: Vec2<f32>) -> f32 {
+        let sample_wpos = player_sample_wpos(player_wpos);
+        self.cached_accessible_player_pos(sample_wpos)
+            .map(|pos| pos.z)
+            .unwrap_or_else(|| self.world.sim().get_surface_alt_approx(sample_wpos) + 0.5)
     }
 
     pub fn generate_mesh(
@@ -257,6 +263,23 @@ fn required_chunk_positions(center_chunk_pos: Vec2<i32>, dimensions: Vec2<u32>) 
 }
 
 fn chunk_key(chunk_pos: Vec2<i32>) -> (i32, i32) { (chunk_pos.x, chunk_pos.y) }
+
+fn player_sample_wpos(player_wpos: Vec2<f32>) -> Vec2<i32> {
+    Vec2::new(player_wpos.x.floor() as i32, player_wpos.y.floor() as i32)
+}
+
+impl OriginalWorldPreview {
+    fn cached_accessible_player_pos(&self, sample_wpos: Vec2<i32>) -> Option<Vec3<f32>> {
+        let rect_size = TerrainChunkSize::RECT_SIZE.as_::<i32>();
+        let chunk_pos = Vec2::new(
+            sample_wpos.x.div_euclid(rect_size.x),
+            sample_wpos.y.div_euclid(rect_size.y),
+        );
+        self.chunk_cache
+            .get(&chunk_key(chunk_pos))
+            .map(|preview_chunk| preview_chunk.chunk.find_accessible_pos(sample_wpos, false))
+    }
+}
 
 pub fn build_original_world_preview() -> Result<OriginalWorldPreview, String> {
     OriginalWorldPreview::new()

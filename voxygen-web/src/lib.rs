@@ -517,12 +517,14 @@ impl VoxygenWebClient {
     fn scene_summary(&self) -> String {
         let (chunks_x, chunks_y) = self.world_mesh.chunk_dimensions;
         let (patch_x, patch_y) = self.world_mesh.chunk_patch;
+        let player_terrain_z = self.world_preview.player_terrain_z(self.player.wpos);
         format!(
             "Seed {} rendered {} original TerrainChunks in a {}x{} patch around {:?} inside a \
              {}x{} WorldSim. New chunks/meshes this update: {}/{}. Chunk/mesh cache: {}/{}. GPU \
-             chunk buffers: {}/{}. Player block position: ({:.1}, {:.1}). WebGPU block faces: {}. \
-             Filled blocks: {}. Liquid blocks: {}. Visible entity markers: {}. Entity spawns: {}. \
-             World features loaded: {}. Wildlife spawn manifests: {}.",
+             chunk buffers: {}/{}. Player block position: ({:.1}, {:.1}). Player terrain z: \
+             {:.1}. WebGPU block faces: {}. Filled blocks: {}. Liquid blocks: {}. Visible entity \
+             markers: {}. Entity spawns: {}. World features loaded: {}. Wildlife spawn manifests: \
+             {}.",
             self.world_mesh.seed,
             self.world_mesh.generated_chunks,
             patch_x,
@@ -538,6 +540,7 @@ impl VoxygenWebClient {
             self.terrain_chunk_buffers.len(),
             self.player.wpos.x,
             self.player.wpos.y,
+            player_terrain_z,
             self.world_mesh.terrain_faces,
             self.world_mesh.filled_blocks,
             self.world_mesh.liquid_blocks,
