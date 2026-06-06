@@ -60,10 +60,14 @@ Current milestone:
   persistent last-interaction status line;
 - report original site, settlement, POI, and selected starting-site metadata in
   the browser status panel for validation;
-- derive temporary visible NPC, trader, captain, guard, villager, and market
-  board markers from the generated original site plots so starter towns no
-  longer render as empty terrain plus only waypoint supplements;
-- include those site-derived NPC/trader/market markers in nearest-target
+- generate original rtsim data for the preview world, report existing and
+  wanted population counts, and surface merchant/guard demand in the browser
+  status panel;
+- derive temporary visible trader, guard, captain, adventurer, and market-board
+  markers from original settlement plots using an rtsim-style profession roster
+  plus original service plots, so starter towns no longer render as empty
+  terrain plus only waypoint supplements;
+- include those rtsim-style site NPC/trader/market markers in nearest-target
   reporting and `E`/`Enter` interaction previews, including market-board trade
   preview status text;
 - preserve original `EntityInfo.body` categories in the web preview and render
@@ -80,8 +84,8 @@ Next milestones:
   and atlas/material pipeline;
 - replace entity and player temporary silhouettes with Voxygen body meshes,
   loadouts, and animation state;
-- replace the temporary site-derived NPC/trader/market markers with direct
-  original rtsim NPC data, profession inventories, dialogue, and loaded-agent
+- replace the temporary rtsim-style profession roster markers with direct
+  original rtsim NPC agents, profession inventories, dialogue, and loaded-agent
   state;
 - connect market-board and trader previews to real inventory/trade UI data
   instead of status-line-only interaction feedback;

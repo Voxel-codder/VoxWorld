@@ -3,10 +3,12 @@ use std::collections::HashMap;
 use common::{
     comp::{Alignment, Body},
     generation::{EntityInfo, EntitySpawn, SpecialEntity},
+    rtsim::{Profession, WorldSettings},
     terrain::{Block, BlockKind, SpriteKind, TerrainChunk, TerrainChunkSize, sprite::Category},
     vol::{ReadVol, RectVolSize},
 };
 use rayon::ThreadPoolBuilder;
+use rtsim::data::architect::TrackedPopulation;
 use vek::{Vec2, Vec3};
 use veloren_world::{
     World,
@@ -35,6 +37,11 @@ pub struct OriginalWorldPreview {
     original_sites: usize,
     original_settlements: usize,
     original_pois: usize,
+    rtsim_sites: usize,
+    rtsim_existing_npcs: usize,
+    rtsim_wanted_population: usize,
+    rtsim_wanted_merchants: usize,
+    rtsim_wanted_guards: usize,
     start: PreviewStartLocation,
     site_markers: Vec<OriginalSiteMarker>,
     seed: u32,
@@ -62,6 +69,11 @@ pub struct OriginalWorldMesh {
     pub original_sites: usize,
     pub original_settlements: usize,
     pub original_pois: usize,
+    pub rtsim_sites: usize,
+    pub rtsim_existing_npcs: usize,
+    pub rtsim_wanted_population: usize,
+    pub rtsim_wanted_merchants: usize,
+    pub rtsim_wanted_guards: usize,
     pub site_npc_markers: usize,
     pub site_trader_markers: usize,
     pub site_market_markers: usize,
@@ -109,11 +121,43 @@ struct OriginalSiteMarker {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OriginalSiteMarkerKind {
-    Villager,
     Trader,
     Guard,
     Captain,
+    Adventurer,
     Market,
+}
+
+struct RtsimPreviewStats {
+    sites: usize,
+    existing_npcs: usize,
+    wanted_population: usize,
+    wanted_merchants: usize,
+    wanted_guards: usize,
+}
+
+impl RtsimPreviewStats {
+    fn from_data(data: &rtsim::Data) -> Self {
+        let mut wanted_merchants = 0usize;
+        let mut wanted_guards = 0usize;
+        for (population, count) in data.architect.wanted_population.iter() {
+            match population {
+                TrackedPopulation::Merchants | TrackedPopulation::OtherTownNpcs => {
+                    wanted_merchants += count as usize;
+                },
+                TrackedPopulation::Guards => wanted_guards += count as usize,
+                _ => {},
+            }
+        }
+
+        Self {
+            sites: data.sites.len(),
+            existing_npcs: data.npcs.npcs.len(),
+            wanted_population: data.architect.wanted_population.total() as usize,
+            wanted_merchants,
+            wanted_guards,
+        }
+    }
 }
 
 impl OriginalWorldPreview {
@@ -149,10 +193,13 @@ impl OriginalWorldPreview {
             original_sites,
             original_settlements,
             original_pois,
+            rtsim_stats,
             start,
             site_markers,
         ) = {
             let index_ref = index_owned.as_index_ref();
+            let rtsim_data = rtsim::Data::generate(&WorldSettings::default(), &world, index_ref);
+            let rtsim_stats = RtsimPreviewStats::from_data(&rtsim_data);
             (
                 count_enabled_features(index_ref.features),
                 index_ref.wildlife_spawns.len(),
@@ -165,6 +212,7 @@ impl OriginalWorldPreview {
                     .filter(|site| site.is_settlement())
                     .count(),
                 world.civs().pois.values().len(),
+                rtsim_stats,
                 select_preview_start(&world, index_ref, dimensions),
                 collect_site_markers(&world, index_ref),
             )
@@ -181,6 +229,11 @@ impl OriginalWorldPreview {
             original_sites,
             original_settlements,
             original_pois,
+            rtsim_sites: rtsim_stats.sites,
+            rtsim_existing_npcs: rtsim_stats.existing_npcs,
+            rtsim_wanted_population: rtsim_stats.wanted_population,
+            rtsim_wanted_merchants: rtsim_stats.wanted_merchants,
+            rtsim_wanted_guards: rtsim_stats.wanted_guards,
             start,
             site_markers,
             seed: SEED,
@@ -293,6 +346,11 @@ impl OriginalWorldPreview {
             self.original_sites,
             self.original_settlements,
             self.original_pois,
+            self.rtsim_sites,
+            self.rtsim_existing_npcs,
+            self.rtsim_wanted_population,
+            self.rtsim_wanted_merchants,
+            self.rtsim_wanted_guards,
             &self.site_markers,
         )
     }
@@ -433,27 +491,163 @@ fn collect_site_markers(world: &World, index: IndexRef) -> Vec<OriginalSiteMarke
         .flat_map(|site_id| {
             let site = &index.sites[site_id];
             let site_name = site.name().unwrap_or("unnamed site").to_owned();
-            site.plots().filter_map(move |plot| {
-                let (kind, label, tile) = marker_from_site_plot(plot)?;
-                let wpos2d = site.tile_center_wpos(tile);
-                Some(OriginalSiteMarker {
-                    wpos: wpos2d.as_().with_z(
-                        world
-                            .sim()
-                            .get_alt_approx(wpos2d)
-                            .unwrap_or_else(|| world.sim().get_surface_alt_approx(wpos2d))
-                            + 1.0,
-                    ),
-                    kind,
-                    label,
-                    site_name: site_name.clone(),
-                })
-            })
+            let mut markers = Vec::new();
+
+            for plot in site.plots() {
+                if let Some((kind, label, tile)) = marker_from_service_plot(plot) {
+                    markers.push(site_marker_at_plot(
+                        world.sim(),
+                        site,
+                        &site_name,
+                        kind,
+                        label,
+                        tile,
+                        Vec2::zero(),
+                    ));
+                }
+            }
+
+            if site.kind.is_some_and(|kind| {
+                matches!(
+                    kind.meta(),
+                    Some(common::terrain::SiteKindMeta::Settlement(_))
+                )
+            }) {
+                let spawn_tiles = site_npc_spawn_tiles(site);
+                let town_plots = site.plots().len();
+                let guards = town_plots / 4;
+                let adventurers = town_plots / 5;
+                let merchants = town_plots / 6 + 1;
+                let town_professions = town_plots.saturating_sub(guards + adventurers);
+                let roster = rtsim_site_roster(guards, adventurers, merchants, town_professions);
+
+                for (index, profession) in roster.into_iter().enumerate() {
+                    let tile = spawn_tiles
+                        .get(index % spawn_tiles.len().max(1))
+                        .copied()
+                        .unwrap_or_else(|| {
+                            site.plazas()
+                                .next()
+                                .map(|plaza| site.plot(plaza).root_tile())
+                                .unwrap_or_default()
+                        });
+                    let (kind, label) = marker_from_rtsim_profession(profession);
+                    markers.push(site_marker_at_plot(
+                        world.sim(),
+                        site,
+                        &site_name,
+                        kind,
+                        label,
+                        tile,
+                        marker_offset(index),
+                    ));
+                }
+            }
+
+            markers
         })
         .collect()
 }
 
-fn marker_from_site_plot(
+fn site_marker_at_plot(
+    sim: &veloren_world::sim::WorldSim,
+    site: &veloren_world::site::Site,
+    site_name: &str,
+    kind: OriginalSiteMarkerKind,
+    label: &'static str,
+    tile: Vec2<i32>,
+    offset: Vec2<f32>,
+) -> OriginalSiteMarker {
+    let wpos2d = site.tile_center_wpos(tile);
+    OriginalSiteMarker {
+        wpos: (wpos2d.as_::<f32>() + offset).with_z(
+            sim.get_alt_approx(wpos2d)
+                .unwrap_or_else(|| sim.get_surface_alt_approx(wpos2d))
+                + 1.0,
+        ),
+        kind,
+        label,
+        site_name: site_name.to_owned(),
+    }
+}
+
+fn site_npc_spawn_tiles(site: &veloren_world::site::Site) -> Vec<Vec2<i32>> {
+    let mut tiles = site
+        .plots()
+        .filter_map(|plot| match plot.meta() {
+            Some(PlotKindMeta::House { door_tile })
+            | Some(PlotKindMeta::Other { door_tile })
+            | Some(PlotKindMeta::AirshipDock { door_tile, .. }) => Some(door_tile),
+            Some(PlotKindMeta::Workshop { door_tile }) => {
+                Some(door_tile.unwrap_or(plot.root_tile()))
+            },
+            Some(PlotKindMeta::Dungeon) | None => None,
+        })
+        .collect::<Vec<_>>();
+    if tiles.is_empty() {
+        tiles.extend(site.plazas().map(|plaza| site.plot(plaza).root_tile()));
+    }
+    if tiles.is_empty() {
+        tiles.push(Vec2::zero());
+    }
+    tiles
+}
+
+fn rtsim_site_roster(
+    guards: usize,
+    adventurers: usize,
+    merchants: usize,
+    town_professions: usize,
+) -> Vec<Profession> {
+    let mut roster = Vec::with_capacity(guards + adventurers + merchants + town_professions);
+    roster.extend(std::iter::repeat_n(Profession::Guard, guards));
+    roster.extend((0..adventurers).map(|rank| Profession::Adventurer((rank % 4) as u32)));
+    roster.extend(std::iter::repeat_n(Profession::Merchant, merchants));
+    let cycle = [
+        Profession::Farmer,
+        Profession::Herbalist,
+        Profession::Blacksmith,
+        Profession::Chef,
+        Profession::Alchemist,
+        Profession::Hunter,
+    ];
+    roster.extend((0..town_professions).map(|index| cycle[index % cycle.len()]));
+    roster
+}
+
+fn marker_from_rtsim_profession(profession: Profession) -> (OriginalSiteMarkerKind, &'static str) {
+    match profession {
+        Profession::Merchant => (OriginalSiteMarkerKind::Trader, "merchant"),
+        Profession::Farmer => (OriginalSiteMarkerKind::Trader, "farmer"),
+        Profession::Herbalist => (OriginalSiteMarkerKind::Trader, "herbalist"),
+        Profession::Blacksmith => (OriginalSiteMarkerKind::Trader, "blacksmith"),
+        Profession::Chef => (OriginalSiteMarkerKind::Trader, "chef"),
+        Profession::Alchemist => (OriginalSiteMarkerKind::Trader, "alchemist"),
+        Profession::Hunter => (OriginalSiteMarkerKind::Trader, "hunter"),
+        Profession::Guard => (OriginalSiteMarkerKind::Guard, "rtsim guard"),
+        Profession::Captain => (OriginalSiteMarkerKind::Captain, "rtsim captain"),
+        Profession::Adventurer(_) => (OriginalSiteMarkerKind::Adventurer, "adventurer"),
+        Profession::Pirate(false) => (OriginalSiteMarkerKind::Guard, "pirate"),
+        Profession::Pirate(true) => (OriginalSiteMarkerKind::Guard, "pirate captain"),
+        Profession::Cultist => (OriginalSiteMarkerKind::Guard, "cultist"),
+    }
+}
+
+fn marker_offset(index: usize) -> Vec2<f32> {
+    const OFFSETS: [Vec2<f32>; 8] = [
+        Vec2::new(0.0, 0.0),
+        Vec2::new(1.5, 0.5),
+        Vec2::new(-1.5, 0.5),
+        Vec2::new(0.5, 1.5),
+        Vec2::new(0.5, -1.5),
+        Vec2::new(2.2, -0.6),
+        Vec2::new(-2.2, -0.6),
+        Vec2::new(-0.6, 2.2),
+    ];
+    OFFSETS[index % OFFSETS.len()]
+}
+
+fn marker_from_service_plot(
     plot: &veloren_world::site::Plot,
 ) -> Option<(OriginalSiteMarkerKind, &'static str, Vec2<i32>)> {
     let fallback_tile = plot.root_tile();
@@ -469,15 +663,6 @@ fn marker_from_site_plot(
         | PlotKind::DesertCityMultiPlot(_) => (OriginalSiteMarkerKind::Trader, "workshop"),
         PlotKind::Tavern(_) => (OriginalSiteMarkerKind::Trader, "tavern"),
         PlotKind::Plaza(_) => (OriginalSiteMarkerKind::Market, "board"),
-        PlotKind::Castle(_) | PlotKind::CliffTower(_) | PlotKind::SavannahGuardHut(_) => {
-            (OriginalSiteMarkerKind::Guard, "post")
-        },
-        PlotKind::House(_)
-        | PlotKind::CoastalHouse(_)
-        | PlotKind::DesertCityTemple(_)
-        | PlotKind::SavannahHut(_)
-        | PlotKind::TerracottaHouse(_)
-        | PlotKind::MyrmidonHouse(_) => (OriginalSiteMarkerKind::Villager, "home"),
         _ => return None,
     };
 
@@ -778,7 +963,7 @@ impl SiteMarkerFocus<'_> {
     fn action_summary(&self) -> String {
         let verb = match self.marker.kind {
             OriginalSiteMarkerKind::Trader | OriginalSiteMarkerKind::Market => "open trade preview",
-            OriginalSiteMarkerKind::Captain | OriginalSiteMarkerKind::Villager => "talk preview",
+            OriginalSiteMarkerKind::Captain | OriginalSiteMarkerKind::Adventurer => "talk preview",
             OriginalSiteMarkerKind::Guard => "talk guard",
         };
         format!("{verb} {}", self.summary())
@@ -826,6 +1011,11 @@ fn mesh_from_terrain_chunks(
     original_sites: usize,
     original_settlements: usize,
     original_pois: usize,
+    rtsim_sites: usize,
+    rtsim_existing_npcs: usize,
+    rtsim_wanted_population: usize,
+    rtsim_wanted_merchants: usize,
+    rtsim_wanted_guards: usize,
     site_markers: &[OriginalSiteMarker],
 ) -> Result<OriginalWorldMesh, String> {
     if chunks.is_empty() {
@@ -917,6 +1107,11 @@ fn mesh_from_terrain_chunks(
         original_sites,
         original_settlements,
         original_pois,
+        rtsim_sites,
+        rtsim_existing_npcs,
+        rtsim_wanted_population,
+        rtsim_wanted_merchants,
+        rtsim_wanted_guards,
         site_npc_markers,
         site_trader_markers,
         site_market_markers,
@@ -952,7 +1147,7 @@ fn append_site_markers(
         match marker.kind {
             OriginalSiteMarkerKind::Trader | OriginalSiteMarkerKind::Captain => trader_count += 1,
             OriginalSiteMarkerKind::Market => market_count += 1,
-            OriginalSiteMarkerKind::Villager | OriginalSiteMarkerKind::Guard => npc_count += 1,
+            OriginalSiteMarkerKind::Guard | OriginalSiteMarkerKind::Adventurer => npc_count += 1,
         }
         entity_markers.push(site_marker_to_entity_marker(
             marker,
@@ -1051,7 +1246,7 @@ fn site_marker_role_label(kind: OriginalSiteMarkerKind) -> &'static str {
         OriginalSiteMarkerKind::Market => "market",
         OriginalSiteMarkerKind::Captain => "captain",
         OriginalSiteMarkerKind::Guard => "guard",
-        OriginalSiteMarkerKind::Villager => "npc",
+        OriginalSiteMarkerKind::Adventurer => "adventurer",
     }
 }
 
@@ -1195,7 +1390,7 @@ fn site_marker_color(kind: OriginalSiteMarkerKind) -> [f32; 3] {
         OriginalSiteMarkerKind::Market => [1.0, 0.62, 0.14],
         OriginalSiteMarkerKind::Captain => [0.38, 0.78, 1.0],
         OriginalSiteMarkerKind::Guard => [0.92, 0.28, 0.28],
-        OriginalSiteMarkerKind::Villager => [0.24, 0.48, 1.0],
+        OriginalSiteMarkerKind::Adventurer => [0.62, 0.52, 1.0],
     }
 }
 

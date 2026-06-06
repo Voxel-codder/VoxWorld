@@ -19,6 +19,7 @@ vek = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 veloren_world = { package = "veloren-world", path = "../world" }
+rtsim = { package = "veloren-rtsim", path = "../rtsim" }
 wgpu = { version = "27", default-features = false, features = [
     "std",
     "wgsl",

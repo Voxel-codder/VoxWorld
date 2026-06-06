@@ -9252,6 +9252,7 @@ dependencies = [
  "rayon",
  "vek 0.17.2",
  "veloren-common",
+ "veloren-rtsim",
  "veloren-world",
  "wasm-bindgen",
  "wasm-bindgen-futures",
