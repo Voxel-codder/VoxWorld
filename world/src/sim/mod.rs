@@ -1342,7 +1342,7 @@ impl WorldSim {
         let mut all_samples = std::time::Duration::default();
         let mut sample_count = 0;
         let report_erosion: &mut dyn FnMut(f64) = &mut move |progress: f64| {
-            let now = std::time::Instant::now();
+            let now = web_time::Instant::now();
             let estimate = if let Some((last_instant, last_progress)) = last {
                 if last_progress > progress {
                     None

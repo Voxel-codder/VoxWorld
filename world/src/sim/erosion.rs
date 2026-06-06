@@ -18,9 +18,9 @@ use std::{
     cmp::{Ordering, Reverse},
     collections::BinaryHeap,
     fmt, mem,
-    time::Instant,
 };
 use vek::*;
+use web_time::Instant;
 
 pub type Alt = f64;
 pub type Compute = f64;

@@ -9099,6 +9099,7 @@ dependencies = [
  "veloren-common-dynlib",
  "veloren-common-frontend",
  "veloren-common-net",
+ "web-time",
 ]
 
 [[package]]
