@@ -4,7 +4,7 @@ use common::{
     comp::{Alignment, Body},
     generation::{EntityInfo, EntitySpawn, SpecialEntity},
     spot::Spot,
-    terrain::{Block, BlockKind, TerrainChunk, TerrainChunkSize},
+    terrain::{Block, BlockKind, SpriteKind, TerrainChunk, TerrainChunkSize, sprite::Category},
     vol::{ReadVol, RectVolSize},
 };
 use rayon::ThreadPoolBuilder;
@@ -49,6 +49,7 @@ pub struct OriginalWorldMesh {
     pub terrain_faces: usize,
     pub filled_blocks: usize,
     pub liquid_blocks: usize,
+    pub terrain_sprite_props: usize,
     pub generated_entity_spawns: usize,
     pub enabled_world_features: usize,
     pub wildlife_spawn_manifests: usize,
@@ -322,6 +323,7 @@ struct ChunkMeshFragment {
     face_count: usize,
     filled_blocks: usize,
     liquid_blocks: usize,
+    sprite_props: usize,
 }
 
 fn mesh_from_terrain_chunks(
@@ -359,6 +361,7 @@ fn mesh_from_terrain_chunks(
     let mut builder = PatchMeshBuilder::new(vertical_origin);
     let mut filled_blocks = 0usize;
     let mut liquid_blocks = 0usize;
+    let mut terrain_sprite_props = 0usize;
     let mut generated_entity_spawns = 0usize;
     let mut entity_markers = Vec::new();
     let mut terrain_chunks = Vec::new();
@@ -382,6 +385,7 @@ fn mesh_from_terrain_chunks(
         });
         filled_blocks += preview_chunk.mesh.filled_blocks;
         liquid_blocks += preview_chunk.mesh.liquid_blocks;
+        terrain_sprite_props += preview_chunk.mesh.sprite_props;
     }
 
     if builder.indices.is_empty() {
@@ -407,6 +411,7 @@ fn mesh_from_terrain_chunks(
         terrain_faces: builder.face_count,
         filled_blocks,
         liquid_blocks,
+        terrain_sprite_props,
         generated_entity_spawns,
         enabled_world_features,
         wildlife_spawn_manifests,
@@ -428,8 +433,17 @@ fn build_chunk_mesh_fragment(chunk: &TerrainChunk) -> ChunkMeshFragment {
     let mut builder = BlockMeshBuilder::new();
     let mut filled_blocks = 0usize;
     let mut liquid_blocks = 0usize;
+    let mut sprite_props = 0usize;
 
     for (pos, block) in chunk.iter_changed() {
+        if let Some(sprite) = block
+            .get_sprite()
+            .filter(|sprite| *sprite != SpriteKind::Empty)
+        {
+            builder.add_sprite_prop(pos, block, sprite);
+            sprite_props += 1;
+        }
+
         let renderable = block.is_filled() || block.is_liquid();
         if !renderable {
             continue;
@@ -450,6 +464,7 @@ fn build_chunk_mesh_fragment(chunk: &TerrainChunk) -> ChunkMeshFragment {
         face_count: builder.face_count,
         filled_blocks,
         liquid_blocks,
+        sprite_props,
     }
 }
 
@@ -646,7 +661,267 @@ impl BlockMeshBuilder {
         self.face_count += 1;
     }
 
+    fn add_sprite_prop(&mut self, pos: Vec3<i32>, block: &Block, sprite: SpriteKind) {
+        let style = sprite_prop_style(block, sprite);
+        match style.shape {
+            SpritePropShape::Cross => self.add_sprite_cross(pos, style),
+            SpritePropShape::Cuboid => self.add_sprite_cuboid(pos, style),
+            SpritePropShape::Pillar => {
+                self.add_sprite_cuboid(pos, SpritePropStyle {
+                    width: style.width * 0.52,
+                    depth: style.depth * 0.52,
+                    ..style
+                });
+                self.add_sprite_cuboid(pos + Vec3::unit_z(), SpritePropStyle {
+                    height: 0.18,
+                    width: style.width,
+                    depth: style.depth,
+                    color: scale_color(style.color, 1.26),
+                    shape: SpritePropShape::Cuboid,
+                });
+            },
+        }
+    }
+
+    fn add_sprite_cross(&mut self, pos: Vec3<i32>, style: SpritePropStyle) {
+        let x = pos.x as f32 + 0.5;
+        let y = pos.y as f32 + 0.5;
+        let z0 = pos.z as f32;
+        let z1 = z0 + style.height;
+        let half_width = style.width * 0.5;
+        let color = scale_color(style.color, 1.08);
+
+        self.add_sprite_quad(
+            [
+                [x - half_width, y, z0],
+                [x + half_width, y, z0],
+                [x + half_width, y, z1],
+                [x - half_width, y, z1],
+            ],
+            color,
+        );
+        self.add_sprite_quad(
+            [
+                [x, y - half_width, z0],
+                [x, y + half_width, z0],
+                [x, y + half_width, z1],
+                [x, y - half_width, z1],
+            ],
+            scale_color(color, 0.90),
+        );
+    }
+
+    fn add_sprite_cuboid(&mut self, pos: Vec3<i32>, style: SpritePropStyle) {
+        let x = pos.x as f32 + 0.5;
+        let y = pos.y as f32 + 0.5;
+        let z0 = pos.z as f32;
+        let z1 = z0 + style.height.max(0.05);
+        let hx = (style.width * 0.5).max(0.03);
+        let hy = (style.depth * 0.5).max(0.03);
+        let corners = [
+            [x - hx, y - hy, z0],
+            [x + hx, y - hy, z0],
+            [x + hx, y + hy, z0],
+            [x - hx, y + hy, z0],
+            [x - hx, y - hy, z1],
+            [x + hx, y - hy, z1],
+            [x + hx, y + hy, z1],
+            [x - hx, y + hy, z1],
+        ];
+        const FACES: [[usize; 4]; 6] = [
+            [0, 1, 2, 3],
+            [4, 7, 6, 5],
+            [0, 4, 5, 1],
+            [1, 5, 6, 2],
+            [2, 6, 7, 3],
+            [3, 7, 4, 0],
+        ];
+        for (face_index, face) in FACES.iter().enumerate() {
+            self.add_sprite_quad(
+                [
+                    corners[face[0]],
+                    corners[face[1]],
+                    corners[face[2]],
+                    corners[face[3]],
+                ],
+                sprite_face_color(style.color, face_index),
+            );
+        }
+    }
+
+    fn add_sprite_quad(&mut self, corners: [[f32; 3]; 4], color: [f32; 3]) {
+        let base = (self.vertices.len() / FLOATS_PER_VERTEX) as u32;
+        for corner in corners {
+            let [x, y, z] = Self::render_point(corner);
+            self.vertices
+                .extend_from_slice(&[x, y, z, color[0], color[1], color[2]]);
+        }
+        self.indices
+            .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        self.face_count += 1;
+    }
+
     fn render_point(point: [f32; 3]) -> [f32; 3] { [point[0], point[2], point[1]] }
+}
+
+#[derive(Clone, Copy)]
+struct SpritePropStyle {
+    shape: SpritePropShape,
+    width: f32,
+    depth: f32,
+    height: f32,
+    color: [f32; 3],
+}
+
+#[derive(Clone, Copy)]
+enum SpritePropShape {
+    Cross,
+    Cuboid,
+    Pillar,
+}
+
+fn sprite_prop_style(block: &Block, sprite: SpriteKind) -> SpritePropStyle {
+    let category = sprite.category();
+    let height = sprite_prop_height(block, sprite, category);
+    let (shape, width, depth) = match category {
+        Category::Plant => (SpritePropShape::Cross, 0.72, 0.08),
+        Category::Resource => (SpritePropShape::Cuboid, 0.44, 0.44),
+        Category::MineableResource => (SpritePropShape::Cuboid, 0.58, 0.58),
+        Category::Furniture | Category::Container | Category::Structural | Category::Modular => {
+            (SpritePropShape::Cuboid, 0.78, 0.78)
+        },
+        Category::Lamp => (SpritePropShape::Pillar, 0.62, 0.62),
+        Category::Decor => (SpritePropShape::Cuboid, 0.54, 0.54),
+        Category::Misc => (SpritePropShape::Cuboid, 0.42, 0.42),
+        Category::Void => (SpritePropShape::Cuboid, 0.0, 0.0),
+    };
+
+    let mut color = sprite_prop_color(sprite);
+    if sprite.collectible_info().is_some() {
+        color = blend_color(color, [1.0, 0.88, 0.34], 0.10);
+    }
+
+    SpritePropStyle {
+        shape,
+        width,
+        depth,
+        height,
+        color,
+    }
+}
+
+fn sprite_prop_height(block: &Block, sprite: SpriteKind, category: Category) -> f32 {
+    let category_height = match category {
+        Category::Void => 0.0,
+        Category::Plant => 0.74,
+        Category::Resource => 0.38,
+        Category::MineableResource => 0.52,
+        Category::Furniture => 1.05,
+        Category::Structural => 1.18,
+        Category::Decor => 0.72,
+        Category::Lamp => 1.55,
+        Category::Container => 0.86,
+        Category::Modular => 1.0,
+        Category::Misc => 0.38,
+    };
+    let sprite_height = sprite
+        .solid_height()
+        .filter(|height| *height > 0.0)
+        .unwrap_or_else(|| block.solid_height().max(category_height));
+    sprite_height.clamp(0.12, 2.8)
+}
+
+fn sprite_prop_color(sprite: SpriteKind) -> [f32; 3] {
+    match sprite {
+        SpriteKind::BlueFlower => [0.28, 0.48, 1.0],
+        SpriteKind::PinkFlower => [1.0, 0.46, 0.76],
+        SpriteKind::PurpleFlower | SpriteKind::Moonbell => [0.70, 0.42, 1.0],
+        SpriteKind::RedFlower | SpriteKind::Pyrebloom => [1.0, 0.22, 0.18],
+        SpriteKind::WhiteFlower => [0.94, 0.94, 0.86],
+        SpriteKind::YellowFlower | SpriteKind::Sunflower => [1.0, 0.82, 0.18],
+        SpriteKind::LanternFlower | SpriteKind::LanternPlant => [0.72, 1.0, 0.68],
+        SpriteKind::LushFlower => [0.52, 0.94, 0.42],
+        SpriteKind::LongGrass
+        | SpriteKind::MediumGrass
+        | SpriteKind::ShortGrass
+        | SpriteKind::LargeGrass
+        | SpriteKind::GrassBlue
+        | SpriteKind::GrassBlueShort
+        | SpriteKind::GrassBlueMedium
+        | SpriteKind::GrassBlueLong
+        | SpriteKind::SavannaGrass
+        | SpriteKind::TallSavannaGrass
+        | SpriteKind::RedSavannaGrass
+        | SpriteKind::TaigaGrass => [0.22, 0.54, 0.20],
+        SpriteKind::Fern
+        | SpriteKind::JungleFern
+        | SpriteKind::LeafyPlant
+        | SpriteKind::JungleLeafyPlant => [0.12, 0.46, 0.18],
+        SpriteKind::DeadBush | SpriteKind::DeadPlant | SpriteKind::Twigs => [0.48, 0.34, 0.18],
+        SpriteKind::Mushroom
+        | SpriteKind::CaveMushroom
+        | SpriteKind::SewerMushroom
+        | SpriteKind::LushMushroom
+        | SpriteKind::RockyMushroom => [0.78, 0.42, 0.30],
+        SpriteKind::GlowMushroom | SpriteKind::CeilingMushroom => [0.58, 0.38, 1.0],
+        SpriteKind::Reed | SpriteKind::SporeReed | SpriteKind::WildFlax | SpriteKind::Flax => {
+            [0.38, 0.58, 0.24]
+        },
+        SpriteKind::Pumpkin => [0.95, 0.44, 0.08],
+        SpriteKind::Apple => [0.92, 0.12, 0.08],
+        SpriteKind::Coconut => [0.45, 0.30, 0.13],
+        SpriteKind::Beehive => [0.92, 0.66, 0.22],
+        SpriteKind::Stones | SpriteKind::Stones2 | SpriteKind::Mud | SpriteKind::Grave => {
+            [0.48, 0.48, 0.48]
+        },
+        SpriteKind::Wood
+        | SpriteKind::Bamboo
+        | SpriteKind::Hardwood
+        | SpriteKind::Ironwood
+        | SpriteKind::Frostwood
+        | SpriteKind::Eldwood => [0.42, 0.24, 0.10],
+        SpriteKind::Amethyst => [0.58, 0.28, 0.84],
+        SpriteKind::Ruby | SpriteKind::Bloodstone => [0.80, 0.12, 0.10],
+        SpriteKind::Sapphire | SpriteKind::Cobalt => [0.15, 0.32, 0.92],
+        SpriteKind::Emerald => [0.14, 0.72, 0.32],
+        SpriteKind::Topaz | SpriteKind::Gold => [1.0, 0.74, 0.16],
+        SpriteKind::Diamond | SpriteKind::Velorite | SpriteKind::VeloriteFrag => [0.52, 0.92, 1.0],
+        SpriteKind::Coal => [0.08, 0.08, 0.08],
+        SpriteKind::Copper => [0.80, 0.42, 0.18],
+        SpriteKind::Iron | SpriteKind::Tin | SpriteKind::Silver | SpriteKind::Lodestone => {
+            [0.62, 0.66, 0.70]
+        },
+        SpriteKind::Lantern
+        | SpriteKind::StreetLamp
+        | SpriteKind::StreetLampTall
+        | SpriteKind::MesaLantern
+        | SpriteKind::SeashellLantern
+        | SpriteKind::BonfireMLit => [1.0, 0.70, 0.24],
+        sprite if sprite.is_defined_as_container() => [0.54, 0.30, 0.12],
+        _ => match sprite.category() {
+            Category::Plant => [0.20, 0.48, 0.18],
+            Category::Resource => [0.56, 0.42, 0.24],
+            Category::MineableResource => [0.50, 0.54, 0.58],
+            Category::Furniture => [0.46, 0.28, 0.16],
+            Category::Structural => [0.42, 0.44, 0.48],
+            Category::Decor => [0.64, 0.52, 0.38],
+            Category::Lamp => [0.98, 0.66, 0.25],
+            Category::Container => [0.54, 0.30, 0.12],
+            Category::Modular => [0.45, 0.42, 0.36],
+            Category::Misc => [0.58, 0.58, 0.60],
+            Category::Void => [0.0, 0.0, 0.0],
+        },
+    }
+}
+
+fn sprite_face_color(color: [f32; 3], face_index: usize) -> [f32; 3] {
+    let shade = match face_index {
+        1 => 1.12,
+        0 => 0.62,
+        2 | 3 => 0.86,
+        _ => 0.74,
+    };
+    scale_color(color, shade)
 }
 
 #[derive(Clone, Copy)]

@@ -612,8 +612,9 @@ impl VoxygenWebClient {
              {}x{} WorldSim. New chunks/meshes this update: {}/{}. Chunk/mesh cache: {}/{}. GPU \
              chunk buffers: {}/{}. Player block position: ({:.1}, {:.1}). Player terrain z: \
              {:.1}. Player facing: {:.0} deg. Blocked terrain moves: {}. WebGPU block faces: {}. \
-             Filled blocks: {}. Liquid blocks: {}. Visible entity markers: {}. Entity spawns: {}. \
-             World features loaded: {}. Wildlife spawn manifests: {}.",
+             Filled blocks: {}. Liquid blocks: {}. Terrain sprite props: {}. Visible entity \
+             markers: {}. Entity spawns: {}. World features loaded: {}. Wildlife spawn manifests: \
+             {}.",
             self.world_mesh.seed,
             self.world_mesh.generated_chunks,
             patch_x,
@@ -635,6 +636,7 @@ impl VoxygenWebClient {
             self.world_mesh.terrain_faces,
             self.world_mesh.filled_blocks,
             self.world_mesh.liquid_blocks,
+            self.world_mesh.terrain_sprite_props,
             self.world_mesh.entity_markers.len(),
             self.world_mesh.generated_entity_spawns,
             self.world_mesh.enabled_world_features,

@@ -43,6 +43,9 @@ Current milestone:
   of the earlier far-away terrain-preview view;
 - convert original `ChunkSupplement.entity_spawns` into visible 3D markers and
   render them alongside a browser-side player marker;
+- convert non-empty original terrain `SpriteKind` blocks into temporary 3D
+  prop meshes so plants, resources, containers, lamps, and structural sprites
+  from generated chunks are visible in the browser preview;
 - preserve original `EntityInfo.body` categories in the web preview and render
   body-aware temporary silhouettes for humanoid, quadruped, flyer, fish, large,
   and object entities;
