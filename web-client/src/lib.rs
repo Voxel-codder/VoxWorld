@@ -45,6 +45,15 @@ struct EntityView {
     position: [f64; 3],
 }
 
+#[derive(Clone, Copy)]
+enum ActionKind {
+    Primary,
+    Secondary,
+    Block,
+    Roll,
+    Jump,
+}
+
 impl InputState {
     const fn new() -> Self {
         Self {
@@ -404,6 +413,11 @@ fn install_keyboard_handlers(window: &Window) -> Result<(), JsValue> {
         if update_key(event.key().as_str(), true) {
             event.prevent_default();
             send_input_state();
+        } else if let Some(action) = action_for_key(event.key().as_str()) {
+            event.prevent_default();
+            if !event.repeat() {
+                send_action(action, true);
+            }
         }
     });
     window.add_event_listener_with_callback("keydown", on_keydown.as_ref().unchecked_ref())?;
@@ -416,6 +430,9 @@ fn install_keyboard_handlers(window: &Window) -> Result<(), JsValue> {
         if update_key(event.key().as_str(), false) {
             event.prevent_default();
             send_input_state();
+        } else if let Some(action) = action_for_key(event.key().as_str()) {
+            event.prevent_default();
+            send_action(action, false);
         }
     });
     window.add_event_listener_with_callback("keyup", on_keyup.as_ref().unchecked_ref())?;
@@ -445,13 +462,24 @@ fn update_key(key: &str, pressed: bool) -> bool {
             "s" | "S" | "ArrowDown" => input.back = pressed,
             "a" | "A" | "ArrowLeft" => input.left = pressed,
             "d" | "D" | "ArrowRight" => input.right = pressed,
-            " " => input.up = pressed,
-            "Shift" => input.down = pressed,
+            "e" | "E" | "PageUp" => input.up = pressed,
+            "q" | "Q" | "PageDown" => input.down = pressed,
             _ => return false,
         }
 
         true
     })
+}
+
+fn action_for_key(key: &str) -> Option<ActionKind> {
+    match key {
+        " " => Some(ActionKind::Jump),
+        "Shift" => Some(ActionKind::Roll),
+        "f" | "F" => Some(ActionKind::Block),
+        "j" | "J" => Some(ActionKind::Primary),
+        "k" | "K" => Some(ActionKind::Secondary),
+        _ => None,
+    }
 }
 
 fn install_pointer_handlers(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
@@ -472,13 +500,49 @@ fn install_pointer_handlers(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
         event.prevent_default();
         update_look_from_pointer(&down_canvas, event.client_x(), event.client_y());
         send_input_state();
+        if event.pointer_type() == "mouse"
+            && let Some(action) = action_for_pointer_button(event.button())
+        {
+            send_action(action, true);
+        }
     });
     canvas.add_event_listener_with_callback(
         "pointerdown",
         on_pointer_down.as_ref().unchecked_ref(),
     )?;
     on_pointer_down.forget();
+
+    let up_canvas = canvas.clone();
+    let on_pointer_up = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+        event.prevent_default();
+        update_look_from_pointer(&up_canvas, event.client_x(), event.client_y());
+        send_input_state();
+        if event.pointer_type() == "mouse"
+            && let Some(action) = action_for_pointer_button(event.button())
+        {
+            send_action(action, false);
+        }
+    });
+    canvas.add_event_listener_with_callback("pointerup", on_pointer_up.as_ref().unchecked_ref())?;
+    on_pointer_up.forget();
+
+    let on_context_menu = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+        event.prevent_default();
+    });
+    canvas.add_event_listener_with_callback(
+        "contextmenu",
+        on_context_menu.as_ref().unchecked_ref(),
+    )?;
+    on_context_menu.forget();
     Ok(())
+}
+
+fn action_for_pointer_button(button: i16) -> Option<ActionKind> {
+    match button {
+        0 => Some(ActionKind::Primary),
+        2 => Some(ActionKind::Secondary),
+        _ => None,
+    }
 }
 
 fn update_look_from_pointer(canvas: &HtmlCanvasElement, client_x: i32, client_y: i32) {
@@ -505,6 +569,21 @@ fn update_look_from_pointer(canvas: &HtmlCanvasElement, client_x: i32, client_y:
     });
 }
 
+fn send_action(action: ActionKind, pressed: bool) {
+    let message = format!(
+        r#"{{"type":"action","action":"{}","pressed":{pressed}}}"#,
+        action.as_str()
+    );
+
+    SOCKET.with(|slot| {
+        if let Some(socket) = slot.borrow().as_ref() {
+            if let Err(error) = socket.send_with_str(&message) {
+                web_sys::console::error_1(&error);
+            }
+        }
+    });
+}
+
 fn send_input_state() {
     let (move_x, move_y, move_z) = INPUT.with(|input| input.borrow().movement());
     let (look_x, look_y, look_z) = INPUT.with(|input| input.borrow().look());
@@ -519,6 +598,18 @@ fn send_input_state() {
             }
         }
     });
+}
+
+impl ActionKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Secondary => "secondary",
+            Self::Block => "block",
+            Self::Roll => "roll",
+            Self::Jump => "jump",
+        }
+    }
 }
 
 fn install_resize_handler(window: &Window, canvas: HtmlCanvasElement) -> Result<(), JsValue> {

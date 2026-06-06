@@ -8,7 +8,7 @@ use std::{
 use common::{
     ViewDistances,
     comp::{
-        self, ControllerInputs,
+        self, ControllerInputs, InputKind,
         body::humanoid::{Body, BodyType, Species},
     },
     uid::Uid,
@@ -42,6 +42,32 @@ pub enum BrowserCommand {
     Chat {
         message: String,
     },
+    Action {
+        action: BrowserAction,
+        pressed: bool,
+    },
+}
+
+#[derive(Debug, Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserAction {
+    Primary,
+    Secondary,
+    Block,
+    Roll,
+    Jump,
+}
+
+impl BrowserAction {
+    fn input_kind(self) -> InputKind {
+        match self {
+            Self::Primary => InputKind::Primary,
+            Self::Secondary => InputKind::Secondary,
+            Self::Block => InputKind::Block,
+            Self::Roll => InputKind::Roll,
+            Self::Jump => InputKind::Jump,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -283,8 +309,31 @@ fn handle_browser_commands(
                     client.send_chat(message);
                 }
             },
+            Ok(BrowserCommand::Action { action, pressed }) => {
+                client.handle_input(action.input_kind(), pressed, None, None);
+            },
             Err(mpsc::TryRecvError::Empty) => return true,
             Err(mpsc::TryRecvError::Disconnected) => return false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BrowserAction, BrowserCommand};
+
+    #[test]
+    fn decodes_browser_action_command() {
+        let command: BrowserCommand =
+            serde_json::from_str(r#"{"type":"action","action":"primary","pressed":true}"#)
+                .expect("action command should decode");
+
+        match command {
+            BrowserCommand::Action { action, pressed } => {
+                assert!(matches!(action, BrowserAction::Primary));
+                assert!(pressed);
+            },
+            other => panic!("unexpected command: {other:?}"),
         }
     }
 }
