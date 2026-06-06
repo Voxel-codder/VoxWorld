@@ -10,7 +10,7 @@ use common::{
     comp::{
         self, ChatType, Content, ControllerInputs, InputKind,
         body::humanoid::{Body, BodyType, Species},
-        inventory::slot::EquipSlot,
+        inventory::{item::ItemDesc, slot::EquipSlot},
     },
     uid::Uid,
     util::dir::Dir,
@@ -26,6 +26,8 @@ const TICK: Duration = Duration::from_millis(50);
 const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(250);
 const SNAPSHOT_ENTITY_LIMIT: usize = 96;
 const SNAPSHOT_INVENTORY_ITEM_LIMIT: usize = 8;
+const PICKUP_INTERACTION_DISTANCE: f32 = 4.0;
+const ENTITY_INTERACTION_DISTANCE: f32 = 5.0;
 const WEB_VIEW_DISTANCE: ViewDistances = ViewDistances {
     terrain: 5,
     entity: 5,
@@ -104,6 +106,7 @@ enum SessionMessage {
         character_count: usize,
         entities: Vec<SnapshotEntity>,
         inventory: Option<SnapshotInventory>,
+        interaction: Option<SnapshotInteraction>,
     },
     Event {
         message: String,
@@ -142,6 +145,13 @@ struct SnapshotInventory {
 struct SnapshotItem {
     name: String,
     amount: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct SnapshotInteraction {
+    action: &'static str,
+    label: String,
+    distance: f32,
 }
 
 #[derive(Debug, Serialize)]
@@ -371,14 +381,14 @@ fn handle_browser_commands(
 fn handle_browser_control(client: &mut Client, control: BrowserControl) {
     match control {
         BrowserControl::Interact => {
-            if let Some(entity) = nearest_pickup_entity(client) {
+            if let Some((entity, _, _)) = nearest_pickup_target(client) {
                 client.pick_up(entity);
-            } else if let Some(entity) = nearest_interactable_entity(client) {
+            } else if let Some((entity, _, _)) = nearest_interactable_target(client) {
                 client.npc_interact(entity);
             }
         },
         BrowserControl::Pickup => {
-            if let Some(entity) = nearest_pickup_entity(client) {
+            if let Some((entity, _, _)) = nearest_pickup_target(client) {
                 client.pick_up(entity);
             }
         },
@@ -390,39 +400,6 @@ fn handle_browser_control(client: &mut Client, control: BrowserControl) {
             let _ = client.respawn();
         },
     }
-}
-
-fn nearest_pickup_entity(client: &Client) -> Option<EcsEntity> {
-    nearest_entity_with_component::<comp::PickupItem>(client, 4.0)
-}
-
-fn nearest_interactable_entity(client: &Client) -> Option<EcsEntity> {
-    nearest_entity_with_component::<comp::Body>(client, 5.0)
-}
-
-fn nearest_entity_with_component<C>(client: &Client, max_distance: f32) -> Option<EcsEntity>
-where
-    C: specs::Component,
-{
-    let origin = client.position()?;
-    let self_entity = client.entity();
-    let ecs = client.state().ecs();
-    let ecs_entities = ecs.entities();
-    let positions = ecs.read_storage::<comp::Pos>();
-    let targets = ecs.read_storage::<C>();
-
-    (&ecs_entities, &positions, &targets)
-        .join()
-        .filter_map(|(entity, position, _)| {
-            if entity == self_entity {
-                return None;
-            }
-
-            let distance = (position.0 - origin).magnitude();
-            (distance.is_finite() && distance <= max_distance).then_some((entity, distance))
-        })
-        .min_by(|(_, a), (_, b)| a.total_cmp(b))
-        .map(|(entity, _)| entity)
 }
 
 #[cfg(test)]
@@ -494,6 +471,7 @@ fn send_snapshot(
     let players_online = client.players().map(str::to_owned).collect();
     let entities = snapshot_entities(client);
     let inventory = snapshot_inventory(client);
+    let interaction = snapshot_interaction(client);
     let (health, energy) = snapshot_player_stats(client);
 
     send_json(outbound, SessionMessage::Snapshot {
@@ -506,6 +484,7 @@ fn send_snapshot(
         character_count: client.character_list().characters.len(),
         entities,
         inventory,
+        interaction,
     });
 }
 
@@ -576,6 +555,22 @@ fn snapshot_entities(client: &Client) -> Vec<SnapshotEntity> {
     entities
 }
 
+fn snapshot_interaction(client: &Client) -> Option<SnapshotInteraction> {
+    if let Some((_, label, distance)) = nearest_pickup_target(client) {
+        return Some(SnapshotInteraction {
+            action: "pickup",
+            label,
+            distance,
+        });
+    }
+
+    nearest_interactable_target(client).map(|(_, label, distance)| SnapshotInteraction {
+        action: "interact",
+        label,
+        distance,
+    })
+}
+
 fn snapshot_inventory(client: &Client) -> Option<SnapshotInventory> {
     let inventories = client.state().ecs().read_storage::<comp::Inventory>();
     let inventory = inventories.get(client.entity())?;
@@ -601,6 +596,68 @@ fn snapshot_inventory(client: &Client) -> Option<SnapshotInventory> {
             .map(snapshot_item),
         items,
     })
+}
+
+#[allow(deprecated)]
+fn nearest_pickup_target(client: &Client) -> Option<(EcsEntity, String, f32)> {
+    let origin = client.position()?;
+    let ecs = client.state().ecs();
+    let ecs_entities = ecs.entities();
+    let positions = ecs.read_storage::<comp::Pos>();
+    let pickups = ecs.read_storage::<comp::PickupItem>();
+
+    (&ecs_entities, &positions, &pickups)
+        .join()
+        .filter_map(|(entity, position, pickup)| {
+            let distance = (position.0 - origin).magnitude();
+            if !distance.is_finite() || distance > PICKUP_INTERACTION_DISTANCE {
+                return None;
+            }
+
+            let amount = pickup.amount();
+            let label = if amount > 1 {
+                format!("Pick up {} x{}", pickup.legacy_name(), amount)
+            } else {
+                format!("Pick up {}", pickup.legacy_name())
+            };
+            Some((entity, label, distance))
+        })
+        .min_by(|(_, _, a), (_, _, b)| a.total_cmp(b))
+}
+
+fn nearest_interactable_target(client: &Client) -> Option<(EcsEntity, String, f32)> {
+    let origin = client.position()?;
+    let self_entity = client.entity();
+    let ecs = client.state().ecs();
+    let ecs_entities = ecs.entities();
+    let positions = ecs.read_storage::<comp::Pos>();
+    let alignments = ecs.read_storage::<comp::Alignment>();
+    let stats = ecs.read_storage::<comp::Stats>();
+
+    (&ecs_entities, &positions, &alignments)
+        .join()
+        .filter_map(|(entity, position, alignment)| {
+            if entity == self_entity
+                || !matches!(
+                    alignment,
+                    comp::Alignment::Npc | comp::Alignment::Tame | comp::Alignment::Owned(_)
+                )
+            {
+                return None;
+            }
+
+            let distance = (position.0 - origin).magnitude();
+            if !distance.is_finite() || distance > ENTITY_INTERACTION_DISTANCE {
+                return None;
+            }
+
+            let label = stats
+                .get(entity)
+                .map(|stats| format!("Interact with {}", content_text(&stats.name)))
+                .unwrap_or_else(|| "Interact".to_owned());
+            Some((entity, label, distance))
+        })
+        .min_by(|(_, _, a), (_, _, b)| a.total_cmp(b))
 }
 
 #[allow(deprecated)]

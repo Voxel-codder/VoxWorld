@@ -18,6 +18,7 @@ platform work can land without disturbing the production server or native client
 - On-screen touch movement, combat, interact, wield, and loadout controls for mobile browsers
 - Snapshot-driven canvas view for the player, nearby entities, health, entity health, and energy
 - Inventory summary HUD from `/play` snapshots
+- Nearby pickup/NPC interaction hint from `/play` snapshots
 - Browser-persisted guest name passed through `/play?name=...`
 - Browser chat input and session event log over the `/play` transport
 - Structured player chat display for messages received from the game server

@@ -38,6 +38,7 @@ struct SnapshotView {
     players_online: u32,
     entities: Vec<EntityView>,
     inventory: Option<InventoryView>,
+    interaction: Option<InteractionView>,
 }
 
 #[derive(Clone)]
@@ -69,6 +70,13 @@ struct InventoryView {
 struct InventoryItemView {
     name: String,
     amount: u32,
+}
+
+#[derive(Clone)]
+struct InteractionView {
+    action: String,
+    label: String,
+    distance: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -354,6 +362,7 @@ fn parse_snapshot(value: &JsValue) -> Option<SnapshotView> {
     let health = stat_property(value, "health");
     let energy = stat_property(value, "energy");
     let inventory = inventory_property(value, "inventory");
+    let interaction = interaction_property(value, "interaction");
     let entities = Reflect::get(value, &JsValue::from_str("entities"))
         .ok()
         .and_then(|entities| entities.dyn_into::<js_sys::Array>().ok())
@@ -382,6 +391,7 @@ fn parse_snapshot(value: &JsValue) -> Option<SnapshotView> {
         players_online,
         entities,
         inventory,
+        interaction,
     })
 }
 
@@ -423,6 +433,19 @@ fn parse_inventory_item(value: JsValue) -> Option<InventoryItemView> {
     Some(InventoryItemView {
         name: string_property(&value, "name")?,
         amount: number_property(&value, "amount")? as u32,
+    })
+}
+
+fn interaction_property(value: &JsValue, key: &str) -> Option<InteractionView> {
+    let interaction = Reflect::get(value, &JsValue::from_str(key)).ok()?;
+    if interaction.is_null() || interaction.is_undefined() {
+        return None;
+    }
+
+    Some(InteractionView {
+        action: string_property(&interaction, "action").unwrap_or_else(|| "interact".to_owned()),
+        label: string_property(&interaction, "label")?,
+        distance: number_property(&interaction, "distance")?,
     })
 }
 
@@ -1165,6 +1188,10 @@ fn draw_snapshot(
     if let Some(inventory) = &snapshot.inventory {
         draw_inventory(context, 28.0, 140.0, inventory);
     }
+
+    if let Some(interaction) = &snapshot.interaction {
+        draw_interaction_hint(context, width, height, interaction);
+    }
 }
 
 #[allow(deprecated)]
@@ -1209,6 +1236,43 @@ fn draw_inventory(context: &CanvasRenderingContext2d, x: f64, y: f64, inventory:
             y + 68.0 + row_height * index as f64,
         );
     }
+}
+
+#[allow(deprecated)]
+fn draw_interaction_hint(
+    context: &CanvasRenderingContext2d,
+    width: f64,
+    height: f64,
+    interaction: &InteractionView,
+) {
+    let panel_width = (width - 48.0).max(220.0).min(420.0);
+    let panel_height = 42.0;
+    let x = ((width - panel_width) * 0.5).max(16.0);
+    let mut y = if width < 760.0 {
+        height - 164.0
+    } else {
+        height - 104.0
+    };
+    y = y.max(96.0);
+    y = y.min((height - panel_height - 24.0).max(96.0));
+
+    let verb = match interaction.action.as_str() {
+        "pickup" => "E / Use",
+        _ => "E / Use",
+    };
+    let text = format!(
+        "{verb}: {} ({:.1}m)",
+        interaction.label,
+        interaction.distance.max(0.0)
+    );
+
+    context.set_fill_style(&JsValue::from_str("rgba(7, 16, 30, 0.78)"));
+    context.fill_rect(x, y, panel_width, panel_height);
+    context.set_stroke_style(&JsValue::from_str("rgba(156, 220, 205, 0.36)"));
+    context.stroke_rect(x, y, panel_width, panel_height);
+    context.set_fill_style(&JsValue::from_str("#e7f7ff"));
+    context.set_font("700 14px system-ui, sans-serif");
+    let _ = context.fill_text_with_max_width(&text, x + 14.0, y + 26.0, panel_width - 28.0);
 }
 
 fn item_label(item: Option<&InventoryItemView>) -> String {
