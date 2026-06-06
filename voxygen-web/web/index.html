@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Vox World Voxygen Web</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260607-001" />
   </head>
   <body>
     <canvas id="voxworld-canvas" aria-label="Vox World Voxygen Web canvas"></canvas>
@@ -15,8 +15,7 @@
       <div id="voxworld-detail" class="detail">Preparing browser runtime...</div>
     </aside>
     <script type="module">
-      import init from "./pkg/voxworld_voxygen_web.js";
-      init().catch((error) => {
+      const showBootError = (error) => {
         const status = document.getElementById("voxworld-status");
         const detail = document.getElementById("voxworld-detail");
         if (status) {
@@ -26,7 +25,23 @@
         if (detail) {
           detail.textContent = error instanceof Error ? error.message : String(error);
         }
-      });
+      };
+
+      try {
+        const assetVersion = "20260607-001";
+        const { default: init } = await import(
+          `./pkg/voxworld_voxygen_web.js?v=${assetVersion}`
+        );
+
+        init({
+          module_or_path: new URL(
+            `./pkg/voxworld_voxygen_web_bg.wasm?v=${assetVersion}`,
+            import.meta.url,
+          ),
+        }).catch(showBootError);
+      } catch (error) {
+        showBootError(error);
+      }
     </script>
   </body>
 </html>

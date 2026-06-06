@@ -745,7 +745,7 @@ async fn write_response(
     content_type: &str,
     body: &[u8],
 ) -> GatewayResult<()> {
-    write_response_with_cache(socket, status, content_type, body, "public, max-age=60").await
+    write_response_with_cache(socket, status, content_type, body, "no-store").await
 }
 
 async fn write_response_no_store(
