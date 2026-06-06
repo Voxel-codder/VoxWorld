@@ -22,6 +22,8 @@ pub const TERRAIN_HORIZONTAL_SCALE: f32 = 0.64;
 const SEED: u32 = 7;
 const MAP_LG: u32 = 5;
 const CHUNK_RADIUS: i32 = 2;
+const TERRAIN_INTERACTION_RANGE_BLOCKS: f32 = 5.0;
+const ENTITY_INTERACTION_RANGE_BLOCKS: f32 = 14.0;
 
 pub struct OriginalWorldPreview {
     world: World,
@@ -263,6 +265,24 @@ impl OriginalWorldPreview {
                 .unwrap_or_else(|| "none".to_owned())
         )
     }
+
+    pub fn interaction_attempt_summary(&self, player_wpos: Vec2<f32>) -> String {
+        let terrain_prop = self.nearest_terrain_prop(player_wpos, TERRAIN_INTERACTION_RANGE_BLOCKS);
+        let entity = self.nearest_entity(player_wpos, ENTITY_INTERACTION_RANGE_BLOCKS);
+        let interaction = match (terrain_prop, entity) {
+            (Some(terrain_prop), Some(entity)) if terrain_prop.distance <= entity.distance => {
+                terrain_prop.action_summary()
+            },
+            (Some(_), Some(entity)) => entity.action_summary(),
+            (Some(terrain_prop), None) => terrain_prop.action_summary(),
+            (None, Some(entity)) => entity.action_summary(),
+            (None, None) => format!(
+                "no target in reach (terrain {:.1}m, entity {:.1}m)",
+                TERRAIN_INTERACTION_RANGE_BLOCKS, ENTITY_INTERACTION_RANGE_BLOCKS
+            ),
+        };
+        format!("Last interaction: {interaction}.")
+    }
 }
 
 fn required_chunk_positions(center_chunk_pos: Vec2<i32>, dimensions: Vec2<u32>) -> Vec<Vec2<i32>> {
@@ -420,6 +440,13 @@ impl TerrainPropFocus<'_> {
             self.prop.interaction, self.prop.category, self.prop.sprite, self.distance
         )
     }
+
+    fn action_summary(&self) -> String {
+        format!(
+            "{} {:?} {:?} at {:.1}m",
+            self.prop.interaction, self.prop.category, self.prop.sprite, self.distance
+        )
+    }
 }
 
 struct EntityFocus<'a> {
@@ -435,6 +462,20 @@ impl EntityFocus<'_> {
             "{} {} {:?} at {:.1}m",
             role, body, self.entity.alignment, self.distance
         )
+    }
+
+    fn action_summary(&self) -> String {
+        let role = entity_role_label(self.entity);
+        let verb = match role {
+            "trader" => "open trade preview",
+            "waypoint" => "focus waypoint",
+            "teleporter" => "focus teleporter",
+            "enemy" => "target enemy",
+            "npc" => "talk preview",
+            "ally" | "passive" | "wild" => "inspect creature",
+            _ => "inspect entity",
+        };
+        format!("{verb} {}", self.summary())
     }
 }
 

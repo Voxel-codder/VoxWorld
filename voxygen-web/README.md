@@ -49,6 +49,9 @@ Current milestone:
 - cache original terrain sprite prop metadata and report the nearest
   collectable/interactable terrain prop and entity target around the
   browser-side player;
+- handle browser-side `E`/`Enter` interaction requests against the cached
+  original terrain prop and entity targets, including range checks and a
+  persistent last-interaction status line;
 - preserve original `EntityInfo.body` categories in the web preview and render
   body-aware temporary silhouettes for humanoid, quadruped, flyer, fish, large,
   and object entities;

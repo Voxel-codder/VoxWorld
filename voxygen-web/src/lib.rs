@@ -137,6 +137,7 @@ struct PlayerState {
     input: InputState,
     last_frame_ms: Option<f64>,
     blocked_move_count: u32,
+    last_interaction: Option<String>,
 }
 
 impl PlayerState {
@@ -150,6 +151,7 @@ impl PlayerState {
             input: InputState::default(),
             last_frame_ms: None,
             blocked_move_count: 0,
+            last_interaction: None,
         }
     }
 
@@ -182,6 +184,7 @@ struct InputState {
     backward: bool,
     left: bool,
     right: bool,
+    interact_requested: bool,
 }
 
 impl InputState {
@@ -191,9 +194,20 @@ impl InputState {
             "ArrowDown" | "s" | "S" => self.backward = pressed,
             "ArrowLeft" | "a" | "A" => self.left = pressed,
             "ArrowRight" | "d" | "D" => self.right = pressed,
+            "e" | "E" | "Enter" => {
+                if pressed {
+                    self.interact_requested = true;
+                }
+            },
             _ => return false,
         }
         true
+    }
+
+    fn consume_interact_request(&mut self) -> bool {
+        let requested = self.interact_requested;
+        self.interact_requested = false;
+        requested
     }
 
     fn direction(&self) -> Option<Vec2<f32>> {
@@ -501,35 +515,48 @@ impl VoxygenWebClient {
 
     fn tick(&mut self, timestamp_ms: f64) -> Result<(), String> {
         let dt = self.player.frame_delta(timestamp_ms);
-        let Some(direction) = self.player.input.direction() else {
+        let interact_requested = self.player.input.consume_interact_request();
+        let direction = self.player.input.direction();
+        if direction.is_none() && !interact_requested {
             return Ok(());
-        };
-        if dt <= 0.0 {
+        }
+        if dt <= 0.0 && !interact_requested {
             return Ok(());
         }
 
-        let previous_wpos = self.player.wpos;
-        let proposed_wpos = self
-            .world_preview
-            .clamp_player_wpos(previous_wpos + direction * (PLAYER_SPEED_BLOCKS_PER_SECOND * dt));
-        let (resolved_wpos, blocked) = self.resolve_player_movement(proposed_wpos);
-        self.player.wpos = resolved_wpos;
-        self.player
-            .update_facing(resolved_wpos - previous_wpos, direction);
-        self.player.terrain_z = self.world_preview.player_terrain_z(self.player.wpos);
-        if blocked {
-            self.player.blocked_move_count = self.player.blocked_move_count.saturating_add(1);
-        }
-
-        let next_center = self.world_preview.center_chunk_for_wpos(self.player.wpos);
-        if next_center != self.player.center_chunk_pos {
-            set_status(
-                "Generating original WorldSim terrain chunks...",
-                StatusState::Loading,
+        if let Some(direction) = direction
+            && dt > 0.0
+        {
+            let previous_wpos = self.player.wpos;
+            let proposed_wpos = self.world_preview.clamp_player_wpos(
+                previous_wpos + direction * (PLAYER_SPEED_BLOCKS_PER_SECOND * dt),
             );
-            let world_mesh = self.world_preview.generate_mesh(next_center)?;
-            self.upload_world_mesh(world_mesh)?;
-            self.player.center_chunk_pos = next_center;
+            let (resolved_wpos, blocked) = self.resolve_player_movement(proposed_wpos);
+            self.player.wpos = resolved_wpos;
+            self.player
+                .update_facing(resolved_wpos - previous_wpos, direction);
+            self.player.terrain_z = self.world_preview.player_terrain_z(self.player.wpos);
+            if blocked {
+                self.player.blocked_move_count = self.player.blocked_move_count.saturating_add(1);
+            }
+
+            let next_center = self.world_preview.center_chunk_for_wpos(self.player.wpos);
+            if next_center != self.player.center_chunk_pos {
+                set_status(
+                    "Generating original WorldSim terrain chunks...",
+                    StatusState::Loading,
+                );
+                let world_mesh = self.world_preview.generate_mesh(next_center)?;
+                self.upload_world_mesh(world_mesh)?;
+                self.player.center_chunk_pos = next_center;
+            }
+        }
+
+        if interact_requested {
+            self.player.last_interaction = Some(
+                self.world_preview
+                    .interaction_attempt_summary(self.player.wpos),
+            );
         }
 
         self.update_camera();
@@ -614,7 +641,7 @@ impl VoxygenWebClient {
              {:.1}. Player facing: {:.0} deg. Blocked terrain moves: {}. WebGPU block faces: {}. \
              Filled blocks: {}. Liquid blocks: {}. Terrain sprite props: {}. Visible entity \
              markers: {}. Entity spawns: {}. World features loaded: {}. Wildlife spawn manifests: \
-             {}.{}",
+             {}. {}{}",
             self.world_mesh.seed,
             self.world_mesh.generated_chunks,
             patch_x,
@@ -641,6 +668,10 @@ impl VoxygenWebClient {
             self.world_mesh.generated_entity_spawns,
             self.world_mesh.enabled_world_features,
             self.world_mesh.wildlife_spawn_manifests,
+            self.player
+                .last_interaction
+                .as_deref()
+                .unwrap_or("Last interaction: none."),
             self.world_preview.interaction_summary(self.player.wpos)
         )
     }
