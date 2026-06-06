@@ -413,6 +413,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b76b3248f836022cd524a90215e9c134151b29fdc6a33d6d919c677668c714a"
 dependencies = [
  "ab_glyph",
+ "assets_manager_macros",
  "bincode",
  "crossbeam-channel",
  "foldhash 0.2.0",
@@ -424,6 +425,17 @@ dependencies = [
  "serde_json",
  "sync_file",
  "tar",
+]
+
+[[package]]
+name = "assets_manager_macros"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf12043520f1009d8a4a4700905faf009b417b1412aaa71167cd8af2be54fb5a"
+dependencies = [
+ "proc-macro2 1.0.103",
+ "quote 1.0.42",
+ "syn 2.0.111",
 ]
 
 [[package]]
@@ -8717,6 +8729,8 @@ version = "0.18.0"
 dependencies = [
  "assets_manager",
  "dot_vox",
+ "getrandom 0.3.4",
+ "getrandom 0.4.1",
  "hashbrown 0.16.0",
  "image",
  "lazy_static",

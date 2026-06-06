@@ -11,6 +11,8 @@ keeping the native client intact.
 Current milestone:
 
 - compile the original `common` and `world` crates for `wasm32-unknown-unknown`;
+- load the first original world asset manifests from a WASM embedded
+  `common-assets` source;
 - generate a small original `WorldSim` in the browser build path;
 - render that original chunk simulation as a WebGPU 3D terrain mesh with a
   camera, vertex/index buffers, and depth testing;
@@ -19,6 +21,8 @@ Current milestone:
 
 Next milestones:
 
+- use the embedded world manifests to call the real `World::generate_chunk`
+  path in the web scene;
 - replace the WorldSim overview mesh with Voxygen's real terrain chunk/block
   meshing path;
 - attach player/session state so the scene follows the live character instead

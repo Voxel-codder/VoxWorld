@@ -4,13 +4,14 @@ description = "Crate for game loading assets for veloren."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [lints]
 workspace = true
 
 [dependencies]
 lazy_static = { workspace = true }
-assets_manager = { version = "0.13", features = ["ab_glyph", "bincode", "ron", "json"] }
+assets_manager = { version = "0.13", features = ["ab_glyph", "bincode", "embedded", "ron", "json"] }
 ron = { workspace = true }
 dot_vox = "5.1"
 wavefront = "0.2" # TODO: Use vertex-colors branch when we have models that have them
@@ -20,6 +21,10 @@ hashbrown = { workspace = true }
 
 # asset tweak
 serde = { workspace = true, optional = true }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom03 = { package = "getrandom", version = "0.3.4", features = ["wasm_js"] }
+getrandom04 = { package = "getrandom", version = "0.4.1", features = ["wasm_js"] }
 
 [dev-dependencies]
 walkdir = "2.3.2"

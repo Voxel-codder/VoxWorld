@@ -17,7 +17,12 @@ pub use assets_manager::{
     source::{self, Source},
 };
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 mod fs;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod embedded_assets {
+    include!(concat!(env!("OUT_DIR"), "/embedded_assets.rs"));
+}
 #[cfg(feature = "plugins")] mod plugin_cache;
 mod walk;
 pub use walk::{Walk, walk_tree};
@@ -27,11 +32,25 @@ lazy_static! {
     /// The HashMap where all loaded assets are stored in.
     static ref ASSETS: plugin_cache::CombinedCache = plugin_cache::CombinedCache::new().unwrap();
 }
-#[cfg(not(feature = "plugins"))]
+#[cfg(all(
+    not(feature = "plugins"),
+    not(all(target_arch = "wasm32", target_os = "unknown"))
+))]
 lazy_static! {
     /// The HashMap where all loaded assets are stored in.
     static ref ASSETS: AssetCache =
             AssetCache::with_source(fs::FileSystem::new().unwrap());
+}
+#[cfg(all(
+    not(feature = "plugins"),
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+lazy_static! {
+    /// The HashMap where all loaded assets are stored in.
+    static ref ASSETS: AssetCache = AssetCache::with_source(
+        source::Embedded::from(embedded_assets::RAW_EMBEDDED)
+    );
 }
 
 // register a new plugin

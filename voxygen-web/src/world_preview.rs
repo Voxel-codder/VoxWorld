@@ -1,6 +1,10 @@
 use rayon::ThreadPoolBuilder;
 use vek::Vec2;
-use veloren_world::sim::{FileOpts, GenOpts, WorldOpts, WorldSim};
+use veloren_world::{
+    config::Features,
+    index::Index,
+    sim::{FileOpts, GenOpts, WorldOpts, WorldSim},
+};
 
 pub const FLOATS_PER_VERTEX: usize = 6;
 
@@ -10,6 +14,8 @@ pub struct OriginalWorldMesh {
     pub chunk_dimensions: (u32, u32),
     pub water_chunks: usize,
     pub forest_chunks: usize,
+    pub enabled_world_features: usize,
+    pub wildlife_spawn_manifests: usize,
     pub seed: u32,
 }
 
@@ -37,10 +43,19 @@ pub fn build_original_world_mesh() -> Result<OriginalWorldMesh, String> {
         &|_| {},
     );
 
-    mesh_from_sim(&sim, SEED)
+    let index = Index::new(SEED);
+    let enabled_world_features = count_enabled_features(&index.features());
+    let wildlife_spawn_manifests = index.wildlife_spawns.len();
+
+    mesh_from_sim(&sim, SEED, enabled_world_features, wildlife_spawn_manifests)
 }
 
-fn mesh_from_sim(sim: &WorldSim, seed: u32) -> Result<OriginalWorldMesh, String> {
+fn mesh_from_sim(
+    sim: &WorldSim,
+    seed: u32,
+    enabled_world_features: usize,
+    wildlife_spawn_manifests: usize,
+) -> Result<OriginalWorldMesh, String> {
     let dimensions = sim.get_size();
     if dimensions.x < 2 || dimensions.y < 2 {
         return Err("original WorldSim generated too few chunks for terrain mesh".to_owned());
@@ -117,8 +132,29 @@ fn mesh_from_sim(sim: &WorldSim, seed: u32) -> Result<OriginalWorldMesh, String>
         chunk_dimensions: (dimensions.x, dimensions.y),
         water_chunks,
         forest_chunks,
+        enabled_world_features,
+        wildlife_spawn_manifests,
         seed,
     })
+}
+
+fn count_enabled_features(features: &Features) -> usize {
+    [
+        features.caverns,
+        features.caves,
+        features.rocks,
+        features.shrubs,
+        features.trees,
+        features.scatter,
+        features.paths,
+        features.spots,
+        features.peak_naming,
+        features.biome_naming,
+        features.train_tracks,
+    ]
+    .into_iter()
+    .filter(|enabled| *enabled)
+    .count()
 }
 
 fn chunk_color(
