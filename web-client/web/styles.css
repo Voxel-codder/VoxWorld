@@ -133,6 +133,10 @@ body {
   color: #e7f7ff;
 }
 
+.chat-line-chat {
+  color: #cfe7ff;
+}
+
 .chat-line-event {
   color: #d8b15f;
 }

@@ -8,7 +8,7 @@ use std::{
 use common::{
     ViewDistances,
     comp::{
-        self, ControllerInputs, InputKind,
+        self, ChatType, Content, ControllerInputs, InputKind,
         body::humanoid::{Body, BodyType, Species},
     },
     uid::Uid,
@@ -87,6 +87,11 @@ enum SessionMessage {
         entities: Vec<SnapshotEntity>,
     },
     Event {
+        message: String,
+    },
+    Chat {
+        scope: &'static str,
+        from: Option<String>,
         message: String,
     },
     Error {
@@ -242,9 +247,7 @@ fn run_session_inner(
                     });
                 },
                 Event::Chat(message) => {
-                    send_json(&outbound, SessionMessage::Event {
-                        message: format!("{message:?}"),
-                    });
+                    send_json(&outbound, browser_chat_message(&client, &message));
                 },
                 _ => {},
             }
@@ -330,7 +333,11 @@ fn handle_browser_commands(
 
 #[cfg(test)]
 mod tests {
-    use super::{BrowserAction, BrowserCommand};
+    use std::num::NonZeroU64;
+
+    use common::comp::{ChatType, Content};
+
+    use super::{BrowserAction, BrowserCommand, chat_scope, content_text};
 
     #[test]
     fn decodes_browser_action_command() {
@@ -345,6 +352,25 @@ mod tests {
             },
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn maps_chat_scope_for_world_messages() {
+        let scope = chat_scope(&ChatType::World(common::uid::Uid(
+            NonZeroU64::new(1).expect("non-zero uid"),
+        )));
+
+        assert_eq!(scope, "world");
+    }
+
+    #[test]
+    fn prefers_chat_content_fallback_text() {
+        let content = Content::WithFallback(
+            Box::new(Content::Key("chat-key".to_owned())),
+            Box::new(Content::Plain("fallback text".to_owned())),
+        );
+
+        assert_eq!(content_text(&content), "fallback text");
     }
 }
 
@@ -438,6 +464,55 @@ fn snapshot_entities(client: &Client) -> Vec<SnapshotEntity> {
     entities.sort_by(|a, b| a.distance.total_cmp(&b.distance));
     entities.truncate(SNAPSHOT_ENTITY_LIMIT);
     entities
+}
+
+fn browser_chat_message(client: &Client, message: &comp::ChatMsg) -> SessionMessage {
+    SessionMessage::Chat {
+        scope: chat_scope(&message.chat_type),
+        from: chat_sender(client, message),
+        message: content_text(message.content()),
+    }
+}
+
+fn chat_scope(chat_type: &ChatType<String>) -> &'static str {
+    match chat_type {
+        ChatType::Online(_) => "online",
+        ChatType::Offline(_) => "offline",
+        ChatType::CommandInfo => "info",
+        ChatType::CommandError => "error",
+        ChatType::Kill(_, _) => "death",
+        ChatType::GroupMeta(_) => "group",
+        ChatType::FactionMeta(_) => "faction",
+        ChatType::Tell(_, _) => "tell",
+        ChatType::Say(_) => "say",
+        ChatType::Group(_, _) => "group",
+        ChatType::Faction(_, _) => "faction",
+        ChatType::Region(_) => "region",
+        ChatType::World(_) => "world",
+        ChatType::Npc(_) | ChatType::NpcSay(_) | ChatType::NpcTell(_, _) => "npc",
+        ChatType::Meta => "system",
+    }
+}
+
+fn chat_sender(client: &Client, message: &comp::ChatMsg) -> Option<String> {
+    let uid = message.uid()?;
+    let context = client.lookup_msg_context(message);
+
+    context
+        .player_info
+        .get(&uid)
+        .map(|player| player.player_alias.clone())
+        .or_else(|| context.entity_name.get(&uid).map(content_text))
+}
+
+fn content_text(content: &Content) -> String {
+    match content {
+        Content::Plain(text) => text.clone(),
+        Content::Key(key) => key.clone(),
+        Content::Attr(key, attr) => format!("{key}.{attr}"),
+        Content::Localized { key, .. } => key.clone(),
+        Content::WithFallback(_, fallback) => content_text(fallback),
+    }
 }
 
 fn default_body() -> Body {

@@ -255,7 +255,22 @@ fn summarize_server_message(data: &JsValue) -> String {
             append_chat_line("event", &message);
             format!("Session event: {message}")
         },
+        Some("chat") => {
+            let line = summarize_chat_message(&value);
+            append_chat_line("chat", &line);
+            format!("Chat: {line}")
+        },
         _ => "Session message received".to_owned(),
+    }
+}
+
+fn summarize_chat_message(value: &JsValue) -> String {
+    let scope = string_property(value, "scope").unwrap_or_else(|| "world".to_owned());
+    let message = string_property(value, "message").unwrap_or_else(|| "message".to_owned());
+
+    match string_property(value, "from").filter(|from| !from.is_empty()) {
+        Some(from) => format!("[{scope}] {from}: {message}"),
+        None => format!("[{scope}] {message}"),
     }
 }
 
