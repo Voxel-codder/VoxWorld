@@ -548,9 +548,9 @@ fn snapshot_entities(client: &Client) -> Vec<SnapshotEntity> {
     let stats = ecs.read_storage::<comp::Stats>();
     let players = client.player_list();
 
-    let mut entities = (&ecs_entities, &uids, &positions)
+    let mut entities = (&ecs_entities, &positions)
         .join()
-        .filter_map(|(entity, uid, position)| {
+        .filter_map(|(entity, position)| {
             let delta = position.0 - origin;
             let distance = delta.magnitude();
 
@@ -558,23 +558,31 @@ fn snapshot_entities(client: &Client) -> Vec<SnapshotEntity> {
                 return None;
             }
 
-            let player = players.get(uid);
+            let uid = uids.get(entity);
+            let player = uid.and_then(|uid| players.get(uid));
             let pickup = pickups.get(entity);
             let health = healths.get(entity);
+            let stats = stats.get(entity);
+            let alignment = alignments.get(entity);
+
+            if uid.is_none()
+                && pickup.is_none()
+                && health.is_none()
+                && stats.is_none()
+                && alignment.is_none()
+            {
+                return None;
+            }
+
             Some(SnapshotEntity {
-                uid: uid.to_string(),
+                uid: snapshot_entity_uid(entity, uid),
                 name: snapshot_entity_name(
                     player.map(|player| player.player_alias.clone()),
                     pickup,
-                    stats.get(entity),
+                    stats,
                 ),
-                kind: snapshot_entity_kind(
-                    player.is_some(),
-                    pickup.is_some(),
-                    alignments.get(entity),
-                    health,
-                ),
-                is_self: self_uid == Some(*uid),
+                kind: snapshot_entity_kind(player.is_some(), pickup.is_some(), alignment, health),
+                is_self: uid.is_some_and(|uid| self_uid == Some(*uid)),
                 position: [position.0.x, position.0.y, position.0.z],
                 distance,
                 health: health.map(|health| PlayerStat {
@@ -589,6 +597,11 @@ fn snapshot_entities(client: &Client) -> Vec<SnapshotEntity> {
     entities.sort_by(|a, b| a.distance.total_cmp(&b.distance));
     entities.truncate(SNAPSHOT_ENTITY_LIMIT);
     entities
+}
+
+fn snapshot_entity_uid(entity: EcsEntity, uid: Option<&Uid>) -> String {
+    uid.map(ToString::to_string)
+        .unwrap_or_else(|| format!("ecs:{}", entity.id()))
 }
 
 fn snapshot_entity_name(
