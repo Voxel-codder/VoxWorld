@@ -37,6 +37,8 @@ Current milestone:
 - constrain browser-side movement with cached accessible terrain z samples so
   steep steps and drops block or slide movement instead of allowing flat-plane
   traversal through every slope;
+- map keyboard movement through the current third-person camera basis so WASD
+  movement follows the rendered play view instead of fixed world axes;
 - frame the WebGPU scene with a player-following third-person camera instead
   of the earlier far-away terrain-preview view;
 - convert original `ChunkSupplement.entity_spawns` into visible 3D markers and
@@ -44,6 +46,8 @@ Current milestone:
 - preserve original `EntityInfo.body` categories in the web preview and render
   body-aware temporary silhouettes for humanoid, quadruped, flyer, fish, large,
   and object entities;
+- store marker yaw and rotate temporary player/entity silhouette parts so the
+  browser-side player visibly faces the last intended movement direction;
 - keep this as the stable place for future Voxygen renderer/HUD migration;
 - avoid extending the temporary 2D canvas client as if it were the final game.
 

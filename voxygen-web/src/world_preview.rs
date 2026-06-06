@@ -68,6 +68,7 @@ pub struct OriginalEntityMarker {
     pub height: f32,
     pub color: [f32; 3],
     pub shape: OriginalEntityMarkerShape,
+    pub yaw_radians: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -492,6 +493,7 @@ fn entity_marker(
         height,
         color: entity_marker_color(entity),
         shape,
+        yaw_radians: 0.0,
     }
 }
 

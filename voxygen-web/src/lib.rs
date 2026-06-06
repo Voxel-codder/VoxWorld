@@ -20,6 +20,9 @@ const MAX_FRAME_DELTA_SECONDS: f32 = 0.05;
 const MAX_PLAYER_STEP_UP_BLOCKS: f32 = 2.25;
 const MAX_PLAYER_DROP_BLOCKS: f32 = 7.0;
 const THIRD_PERSON_CAMERA_DISTANCE: f32 = 34.0;
+const CAMERA_FORWARD_WORLD: [f32; 2] = [-0.58, -0.72];
+const CAMERA_RIGHT_WORLD: [f32; 2] = [0.72, -0.58];
+const MIN_PLAYER_FACING_MOVE_BLOCKS: f32 = 0.01;
 const TERRAIN_SHADER: &str = r#"
 struct Camera {
     view_proj: mat4x4<f32>,
@@ -129,6 +132,7 @@ struct PlayerState {
     wpos: Vec2<f32>,
     terrain_z: f32,
     center_chunk_pos: Vec2<i32>,
+    facing: Vec2<f32>,
     aspect: f32,
     input: InputState,
     last_frame_ms: Option<f64>,
@@ -141,6 +145,7 @@ impl PlayerState {
             wpos,
             terrain_z,
             center_chunk_pos,
+            facing: camera_forward_world(),
             aspect,
             input: InputState::default(),
             last_frame_ms: None,
@@ -157,6 +162,18 @@ impl PlayerState {
         self.last_frame_ms = Some(timestamp_ms);
         dt
     }
+
+    fn update_facing(&mut self, movement_delta: Vec2<f32>, intended_direction: Vec2<f32>) {
+        self.facing = if vec2_len_sq(movement_delta)
+            > MIN_PLAYER_FACING_MOVE_BLOCKS * MIN_PLAYER_FACING_MOVE_BLOCKS
+        {
+            normalize2(movement_delta)
+        } else {
+            intended_direction
+        };
+    }
+
+    fn facing_yaw_radians(&self) -> f32 { self.facing.y.atan2(self.facing.x) }
 }
 
 #[derive(Default)]
@@ -180,17 +197,31 @@ impl InputState {
     }
 
     fn direction(&self) -> Option<Vec2<f32>> {
-        let x = i32::from(self.right) - i32::from(self.left);
-        let y = i32::from(self.backward) - i32::from(self.forward);
-        if x == 0 && y == 0 {
+        let forward_axis = i32::from(self.forward) - i32::from(self.backward);
+        let right_axis = i32::from(self.right) - i32::from(self.left);
+        if forward_axis == 0 && right_axis == 0 {
             return None;
         }
 
-        let direction = Vec2::new(x as f32, y as f32);
-        let magnitude = (direction.x * direction.x + direction.y * direction.y).sqrt();
-        Some(direction / magnitude.max(f32::EPSILON))
+        Some(normalize2(
+            camera_forward_world() * forward_axis as f32 + camera_right_world() * right_axis as f32,
+        ))
     }
 }
+
+fn camera_forward_world() -> Vec2<f32> {
+    normalize2(Vec2::new(CAMERA_FORWARD_WORLD[0], CAMERA_FORWARD_WORLD[1]))
+}
+
+fn camera_right_world() -> Vec2<f32> {
+    normalize2(Vec2::new(CAMERA_RIGHT_WORLD[0], CAMERA_RIGHT_WORLD[1]))
+}
+
+fn normalize2(direction: Vec2<f32>) -> Vec2<f32> {
+    direction / vec2_len_sq(direction).sqrt().max(f32::EPSILON)
+}
+
+fn vec2_len_sq(vector: Vec2<f32>) -> f32 { vector.x * vector.x + vector.y * vector.y }
 
 impl VoxygenWebClient {
     async fn new() -> Result<Self, String> {
@@ -280,11 +311,15 @@ impl VoxygenWebClient {
             sync_terrain_chunk_buffers(&device, &mut terrain_chunk_buffers, &world_mesh)?;
         let (entity_marker_vertex_buffer, entity_marker_index_buffer, entity_marker_index_count) =
             create_marker_buffers(&device, &world_mesh.entity_markers, "Entity");
-        let player_marker = player_marker(world_preview.player_render_position(
-            player_wpos,
-            center_chunk_pos,
-            world_mesh.vertical_origin,
-        ));
+        let player = PlayerState::new(player_wpos, player_terrain_z, center_chunk_pos, aspect);
+        let player_marker = player_marker(
+            world_preview.player_render_position(
+                player_wpos,
+                center_chunk_pos,
+                world_mesh.vertical_origin,
+            ),
+            player.facing_yaw_radians(),
+        );
         let (player_marker_vertex_buffer, player_marker_index_buffer, player_marker_index_count) =
             create_marker_buffers(&device, &[player_marker], "Player");
 
@@ -308,7 +343,7 @@ impl VoxygenWebClient {
             camera_bind_group,
             world_preview,
             world_mesh,
-            player: PlayerState::new(player_wpos, player_terrain_z, center_chunk_pos, aspect),
+            player,
             keydown_listener: None,
             keyup_listener: None,
         })
@@ -473,11 +508,14 @@ impl VoxygenWebClient {
             return Ok(());
         }
 
-        let proposed_wpos = self.world_preview.clamp_player_wpos(
-            self.player.wpos + direction * (PLAYER_SPEED_BLOCKS_PER_SECOND * dt),
-        );
+        let previous_wpos = self.player.wpos;
+        let proposed_wpos = self
+            .world_preview
+            .clamp_player_wpos(previous_wpos + direction * (PLAYER_SPEED_BLOCKS_PER_SECOND * dt));
         let (resolved_wpos, blocked) = self.resolve_player_movement(proposed_wpos);
         self.player.wpos = resolved_wpos;
+        self.player
+            .update_facing(resolved_wpos - previous_wpos, direction);
         self.player.terrain_z = self.world_preview.player_terrain_z(self.player.wpos);
         if blocked {
             self.player.blocked_move_count = self.player.blocked_move_count.saturating_add(1);
@@ -558,7 +596,7 @@ impl VoxygenWebClient {
             self.player.center_chunk_pos,
             self.world_mesh.vertical_origin,
         );
-        let marker = player_marker(player_render_pos);
+        let marker = player_marker(player_render_pos, self.player.facing_yaw_radians());
         let (vertex_buffer, index_buffer, index_count) =
             create_marker_buffers(&self.device, &[marker], "Player");
         self.player_marker_vertex_buffer = vertex_buffer;
@@ -573,9 +611,9 @@ impl VoxygenWebClient {
             "Seed {} rendered {} original TerrainChunks in a {}x{} patch around {:?} inside a \
              {}x{} WorldSim. New chunks/meshes this update: {}/{}. Chunk/mesh cache: {}/{}. GPU \
              chunk buffers: {}/{}. Player block position: ({:.1}, {:.1}). Player terrain z: \
-             {:.1}. Blocked terrain moves: {}. WebGPU block faces: {}. Filled blocks: {}. Liquid \
-             blocks: {}. Visible entity markers: {}. Entity spawns: {}. World features loaded: \
-             {}. Wildlife spawn manifests: {}.",
+             {:.1}. Player facing: {:.0} deg. Blocked terrain moves: {}. WebGPU block faces: {}. \
+             Filled blocks: {}. Liquid blocks: {}. Visible entity markers: {}. Entity spawns: {}. \
+             World features loaded: {}. Wildlife spawn manifests: {}.",
             self.world_mesh.seed,
             self.world_mesh.generated_chunks,
             patch_x,
@@ -592,6 +630,7 @@ impl VoxygenWebClient {
             self.player.wpos.x,
             self.player.wpos.y,
             self.player.terrain_z,
+            self.player.facing_yaw_radians().to_degrees(),
             self.player.blocked_move_count,
             self.world_mesh.terrain_faces,
             self.world_mesh.filled_blocks,
@@ -787,13 +826,14 @@ fn marker_buffer_label(prefix: &'static str, kind: &'static str) -> &'static str
     }
 }
 
-fn player_marker(render_pos: [f32; 3]) -> OriginalEntityMarker {
+fn player_marker(render_pos: [f32; 3], yaw_radians: f32) -> OriginalEntityMarker {
     OriginalEntityMarker {
         render_pos: [render_pos[0], render_pos[1] + 0.18, render_pos[2]],
         radius: 0.78,
         height: 2.55,
         color: [1.0, 0.96, 0.22],
         shape: OriginalEntityMarkerShape::Humanoid,
+        yaw_radians,
     }
 }
 
@@ -822,37 +862,48 @@ fn add_humanoid_marker(
     indices: &mut Vec<u32>,
     marker: OriginalEntityMarker,
 ) {
-    let [x, y, z] = marker.render_pos;
     let r = marker.radius;
     let h = marker.height;
-    add_marker_cuboid(
+    add_marker_part(
         vertices,
         indices,
-        [x, y + h * 0.38, z],
+        marker,
+        [0.0, h * 0.38, 0.0],
         [r * 0.48, h * 0.30, r * 0.34],
         marker.color,
     );
-    add_marker_cuboid(
+    add_marker_part(
         vertices,
         indices,
-        [x, y + h * 0.78, z],
+        marker,
+        [0.0, h * 0.78, 0.0],
         [r * 0.34, h * 0.13, r * 0.34],
         tint_marker_color(marker.color, 1.08),
     );
+    add_marker_part(
+        vertices,
+        indices,
+        marker,
+        [r * 0.36, h * 0.79, 0.0],
+        [r * 0.07, h * 0.055, r * 0.18],
+        tint_marker_color(marker.color, 1.18),
+    );
     for x_offset in [-r * 0.23, r * 0.23] {
-        add_marker_cuboid(
+        add_marker_part(
             vertices,
             indices,
-            [x + x_offset, y + h * 0.13, z],
+            marker,
+            [x_offset, h * 0.13, 0.0],
             [r * 0.13, h * 0.17, r * 0.14],
             tint_marker_color(marker.color, 0.86),
         );
     }
     for x_offset in [-r * 0.60, r * 0.60] {
-        add_marker_cuboid(
+        add_marker_part(
             vertices,
             indices,
-            [x + x_offset, y + h * 0.42, z],
+            marker,
+            [x_offset, h * 0.42, 0.0],
             [r * 0.11, h * 0.24, r * 0.11],
             tint_marker_color(marker.color, 0.92),
         );
@@ -864,36 +915,39 @@ fn add_quadruped_marker(
     indices: &mut Vec<u32>,
     marker: OriginalEntityMarker,
 ) {
-    let [x, y, z] = marker.render_pos;
     let r = marker.radius;
     let h = marker.height;
-    add_marker_cuboid(
+    add_marker_part(
         vertices,
         indices,
-        [x, y + h * 0.43, z],
+        marker,
+        [0.0, h * 0.43, 0.0],
         [r * 1.12, h * 0.23, r * 0.46],
         marker.color,
     );
-    add_marker_cuboid(
+    add_marker_part(
         vertices,
         indices,
-        [x + r * 1.28, y + h * 0.55, z],
+        marker,
+        [r * 1.28, h * 0.55, 0.0],
         [r * 0.36, h * 0.18, r * 0.32],
         tint_marker_color(marker.color, 1.06),
     );
-    add_marker_cuboid(
+    add_marker_part(
         vertices,
         indices,
-        [x - r * 1.34, y + h * 0.48, z],
+        marker,
+        [-r * 1.34, h * 0.48, 0.0],
         [r * 0.22, h * 0.06, r * 0.16],
         tint_marker_color(marker.color, 0.78),
     );
     for x_offset in [-r * 0.70, r * 0.70] {
         for z_offset in [-r * 0.30, r * 0.30] {
-            add_marker_cuboid(
+            add_marker_part(
                 vertices,
                 indices,
-                [x + x_offset, y + h * 0.15, z + z_offset],
+                marker,
+                [x_offset, h * 0.15, z_offset],
                 [r * 0.10, h * 0.16, r * 0.09],
                 tint_marker_color(marker.color, 0.84),
             );
@@ -902,84 +956,90 @@ fn add_quadruped_marker(
 }
 
 fn add_flyer_marker(vertices: &mut Vec<f32>, indices: &mut Vec<u32>, marker: OriginalEntityMarker) {
-    let [x, y, z] = marker.render_pos;
     let r = marker.radius;
     let h = marker.height;
-    add_marker_cuboid(
+    add_marker_part(
         vertices,
         indices,
-        [x, y + h * 0.50, z],
+        marker,
+        [0.0, h * 0.50, 0.0],
         [r * 0.62, h * 0.20, r * 0.36],
         marker.color,
     );
     for z_offset in [-r * 0.98, r * 0.98] {
-        add_marker_cuboid(
+        add_marker_part(
             vertices,
             indices,
-            [x - r * 0.10, y + h * 0.52, z + z_offset],
+            marker,
+            [-r * 0.10, h * 0.52, z_offset],
             [r * 0.44, h * 0.05, r * 0.70],
             tint_marker_color(marker.color, 0.90),
         );
     }
-    add_marker_cuboid(
+    add_marker_part(
         vertices,
         indices,
-        [x + r * 0.78, y + h * 0.58, z],
+        marker,
+        [r * 0.78, h * 0.58, 0.0],
         [r * 0.28, h * 0.12, r * 0.24],
         tint_marker_color(marker.color, 1.08),
     );
 }
 
 fn add_fish_marker(vertices: &mut Vec<f32>, indices: &mut Vec<u32>, marker: OriginalEntityMarker) {
-    let [x, y, z] = marker.render_pos;
     let r = marker.radius;
     let h = marker.height;
-    add_marker_cuboid(
+    add_marker_part(
         vertices,
         indices,
-        [x, y + h * 0.46, z],
+        marker,
+        [0.0, h * 0.46, 0.0],
         [r * 1.02, h * 0.20, r * 0.32],
         marker.color,
     );
-    add_marker_cuboid(
+    add_marker_part(
         vertices,
         indices,
-        [x - r * 1.16, y + h * 0.46, z],
+        marker,
+        [-r * 1.16, h * 0.46, 0.0],
         [r * 0.20, h * 0.30, r * 0.11],
         tint_marker_color(marker.color, 0.92),
     );
-    add_marker_cuboid(
+    add_marker_part(
         vertices,
         indices,
-        [x + r * 0.95, y + h * 0.48, z],
+        marker,
+        [r * 0.95, h * 0.48, 0.0],
         [r * 0.18, h * 0.13, r * 0.20],
         tint_marker_color(marker.color, 1.06),
     );
 }
 
 fn add_large_marker(vertices: &mut Vec<f32>, indices: &mut Vec<u32>, marker: OriginalEntityMarker) {
-    let [x, y, z] = marker.render_pos;
     let r = marker.radius;
     let h = marker.height;
-    add_marker_cuboid(
+    add_marker_part(
         vertices,
         indices,
-        [x, y + h * 0.38, z],
+        marker,
+        [0.0, h * 0.38, 0.0],
         [r * 0.78, h * 0.34, r * 0.62],
         marker.color,
     );
-    add_marker_cuboid(
+    add_marker_part(
         vertices,
         indices,
-        [x, y + h * 0.82, z],
+        marker,
+        [0.0, h * 0.82, 0.0],
         [r * 0.48, h * 0.15, r * 0.45],
         tint_marker_color(marker.color, 1.05),
     );
     for x_offset in [-r * 0.52, r * 0.52] {
-        add_marker_cuboid(
+        add_marker_part(
             vertices,
             indices,
-            [x + x_offset, y + h * 0.12, z],
+            marker,
+            [x_offset, h * 0.12, 0.0],
             [r * 0.16, h * 0.18, r * 0.18],
             tint_marker_color(marker.color, 0.84),
         );
@@ -991,14 +1051,39 @@ fn add_object_marker(
     indices: &mut Vec<u32>,
     marker: OriginalEntityMarker,
 ) {
-    let [x, y, z] = marker.render_pos;
-    add_marker_cuboid(
+    add_marker_part(
         vertices,
         indices,
-        [x, y + marker.height * 0.5, z],
+        marker,
+        [0.0, marker.height * 0.5, 0.0],
         [marker.radius, marker.height * 0.5, marker.radius],
         marker.color,
     );
+}
+
+fn add_marker_part(
+    vertices: &mut Vec<f32>,
+    indices: &mut Vec<u32>,
+    marker: OriginalEntityMarker,
+    local_center: [f32; 3],
+    half_extents: [f32; 3],
+    color: [f32; 3],
+) {
+    add_marker_cuboid(
+        vertices,
+        indices,
+        marker_part_center(marker, local_center),
+        half_extents,
+        marker.yaw_radians,
+        color,
+    );
+}
+
+fn marker_part_center(marker: OriginalEntityMarker, local_center: [f32; 3]) -> [f32; 3] {
+    let [x, y, z] = marker.render_pos;
+    let [local_x, local_y, local_z] = local_center;
+    let [rotated_x, rotated_z] = rotate_marker_xz(local_x, local_z, marker.yaw_radians);
+    [x + rotated_x, y + local_y, z + rotated_z]
 }
 
 fn add_marker_cuboid(
@@ -1006,19 +1091,20 @@ fn add_marker_cuboid(
     indices: &mut Vec<u32>,
     center: [f32; 3],
     half_extents: [f32; 3],
+    yaw_radians: f32,
     color: [f32; 3],
 ) {
     let [x, y, z] = center;
     let [hx, hy, hz] = half_extents.map(|extent| extent.max(0.01));
     let corners = [
-        [x - hx, y - hy, z - hz],
-        [x + hx, y - hy, z - hz],
-        [x + hx, y - hy, z + hz],
-        [x - hx, y - hy, z + hz],
-        [x - hx, y + hy, z - hz],
-        [x + hx, y + hy, z - hz],
-        [x + hx, y + hy, z + hz],
-        [x - hx, y + hy, z + hz],
+        rotated_marker_corner(x, y, z, -hx, -hy, -hz, yaw_radians),
+        rotated_marker_corner(x, y, z, hx, -hy, -hz, yaw_radians),
+        rotated_marker_corner(x, y, z, hx, -hy, hz, yaw_radians),
+        rotated_marker_corner(x, y, z, -hx, -hy, hz, yaw_radians),
+        rotated_marker_corner(x, y, z, -hx, hy, -hz, yaw_radians),
+        rotated_marker_corner(x, y, z, hx, hy, -hz, yaw_radians),
+        rotated_marker_corner(x, y, z, hx, hy, hz, yaw_radians),
+        rotated_marker_corner(x, y, z, -hx, hy, hz, yaw_radians),
     ];
     const FACES: [[usize; 4]; 6] = [
         [0, 1, 2, 3],
@@ -1038,6 +1124,31 @@ fn add_marker_cuboid(
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
+}
+
+fn rotated_marker_corner(
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    local_x: f32,
+    local_y: f32,
+    local_z: f32,
+    yaw_radians: f32,
+) -> [f32; 3] {
+    let [rotated_x, rotated_z] = rotate_marker_xz(local_x, local_z, yaw_radians);
+    [
+        center_x + rotated_x,
+        center_y + local_y,
+        center_z + rotated_z,
+    ]
+}
+
+fn rotate_marker_xz(local_x: f32, local_z: f32, yaw_radians: f32) -> [f32; 2] {
+    let (sin_yaw, cos_yaw) = yaw_radians.sin_cos();
+    [
+        local_x * cos_yaw - local_z * sin_yaw,
+        local_x * sin_yaw + local_z * cos_yaw,
+    ]
 }
 
 fn tint_marker_color(color: [f32; 3], factor: f32) -> [f32; 3] {
