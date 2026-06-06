@@ -547,7 +547,8 @@ impl VoxygenWebClient {
         let mut world_preview = world_preview::build_original_world_preview()?;
         let center_chunk_pos = world_preview.initial_center_chunk_pos();
         let player_wpos = world_preview.initial_player_wpos();
-        let world_mesh = world_preview.generate_mesh(center_chunk_pos)?;
+        let world_mesh =
+            world_preview.generate_mesh(center_chunk_pos, Some(camera_forward_world()))?;
         let player_terrain_z = world_preview.player_terrain_z(player_wpos);
         set_detail(
             "Original WorldSim terrain patch generated. Requesting browser WebGPU adapter...",
@@ -857,7 +858,9 @@ impl VoxygenWebClient {
                     "Generating original WorldSim terrain chunks...",
                     StatusState::Loading,
                 );
-                let world_mesh = self.world_preview.generate_mesh(next_center)?;
+                let world_mesh = self
+                    .world_preview
+                    .generate_mesh(next_center, Some(self.player.facing))?;
                 self.upload_world_mesh(world_mesh)?;
                 self.player.center_chunk_pos = next_center;
             }
@@ -980,13 +983,13 @@ impl VoxygenWebClient {
         format!(
             "Seed {} {}. Rendered {} original TerrainChunks in a {}x{} patch around {:?} inside a \
              {}x{} WorldSim. Original sites/settlements/POIs: {}/{}/{}. New chunks/meshes this \
-             update: {}/{}. Chunk/mesh cache: {}/{} retained within radius {} (evicted {}). GPU \
-             chunk buffers: {}/{}. Player block position: ({:.1}, {:.1}). Player terrain z: \
-             {:.1}. Player facing: {:.0} deg. Blocked terrain moves: {}. WebGPU block faces: {}. \
-             Filled blocks: {}. Liquid blocks: {}. Terrain sprite props: {}. Visible entity \
-             markers: {}. Entity spawns: {}. Rtsim sites/existing/wanted: {}/{}/{} (merchants {}, \
-             guards {}). Site NPC/trader/market markers: {}/{}/{}. World features loaded: {}. \
-             Wildlife spawn manifests: {}. {}{}",
+             update: {}/{}. Prefetched chunks: {}/{}. Chunk/mesh cache: {}/{} retained within \
+             radius {} (evicted {}). GPU chunk buffers: {}/{}. Player block position: ({:.1}, \
+             {:.1}). Player terrain z: {:.1}. Player facing: {:.0} deg. Blocked terrain moves: \
+             {}. WebGPU block faces: {}. Filled blocks: {}. Liquid blocks: {}. Terrain sprite \
+             props: {}. Visible entity markers: {}. Entity spawns: {}. Rtsim \
+             sites/existing/wanted: {}/{}/{} (merchants {}, guards {}). Site NPC/trader/market \
+             markers: {}/{}/{}. World features loaded: {}. Wildlife spawn manifests: {}. {}{}",
             self.world_mesh.seed,
             self.world_preview.start_summary(),
             self.world_mesh.generated_chunks,
@@ -1000,6 +1003,8 @@ impl VoxygenWebClient {
             self.world_mesh.original_pois,
             self.world_mesh.newly_generated_chunks,
             self.world_mesh.newly_meshed_chunks,
+            self.world_mesh.prefetched_chunks,
+            self.world_mesh.prefetch_candidates,
             self.world_mesh.cached_chunks,
             self.world_mesh.cached_mesh_chunks,
             self.world_mesh.chunk_cache_retain_radius,

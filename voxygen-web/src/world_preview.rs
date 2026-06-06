@@ -68,6 +68,8 @@ pub struct OriginalWorldMesh {
     pub cached_mesh_chunks: usize,
     pub evicted_cached_chunks: usize,
     pub chunk_cache_retain_radius: i32,
+    pub prefetched_chunks: usize,
+    pub prefetch_candidates: usize,
     pub terrain_faces: usize,
     pub filled_blocks: usize,
     pub liquid_blocks: usize,
@@ -415,6 +417,7 @@ impl OriginalWorldPreview {
     pub fn generate_mesh(
         &mut self,
         center_chunk_pos: Vec2<i32>,
+        prefetch_direction: Option<Vec2<f32>>,
     ) -> Result<OriginalWorldMesh, String> {
         let center_chunk_pos = self.clamp_center_chunk_pos(center_chunk_pos);
         let required_chunk_positions = required_chunk_positions(center_chunk_pos, self.dimensions);
@@ -448,6 +451,38 @@ impl OriginalWorldPreview {
             newly_generated_chunks += 1;
         }
 
+        let prefetch_chunk_positions =
+            prefetch_chunk_positions(center_chunk_pos, self.dimensions, prefetch_direction);
+        let prefetch_candidates = prefetch_chunk_positions.len();
+        let mut prefetched_chunks = 0usize;
+        for chunk_pos in &prefetch_chunk_positions {
+            let key = chunk_key(*chunk_pos);
+            if self.chunk_cache.contains_key(&key) {
+                continue;
+            }
+
+            let (terrain_chunk, supplement) = {
+                let index_ref = self.index_owned.as_index_ref();
+                let preview_index = IndexRef {
+                    features: &self.preview_features,
+                    ..index_ref
+                };
+                self.world
+                    .generate_chunk(preview_index, *chunk_pos, None, || false, None)
+                    .map_err(|_| {
+                        format!("original World::generate_chunk cancelled at {chunk_pos:?}")
+                    })?
+            };
+            let mesh = build_chunk_mesh_fragment(&terrain_chunk, *chunk_pos);
+            self.chunk_cache.insert(key, GeneratedPreviewChunk {
+                pos: *chunk_pos,
+                chunk: terrain_chunk,
+                entity_spawns: supplement.entity_spawns,
+                mesh,
+            });
+            prefetched_chunks += 1;
+        }
+
         let evicted_cached_chunks =
             self.evict_distant_cached_chunks(center_chunk_pos, CHUNK_CACHE_RETAIN_RADIUS);
         let cached_chunks = self.chunk_cache.len();
@@ -466,6 +501,8 @@ impl OriginalWorldPreview {
             cached_chunks,
             evicted_cached_chunks,
             CHUNK_CACHE_RETAIN_RADIUS,
+            prefetched_chunks,
+            prefetch_candidates,
             self.seed,
             self.enabled_world_features,
             self.wildlife_spawn_manifests,
@@ -548,6 +585,70 @@ fn required_chunk_positions(center_chunk_pos: Vec2<i32>, dimensions: Vec2<u32>) 
         }
     }
     chunk_positions
+}
+
+fn prefetch_chunk_positions(
+    center_chunk_pos: Vec2<i32>,
+    dimensions: Vec2<u32>,
+    direction: Option<Vec2<f32>>,
+) -> Vec<Vec2<i32>> {
+    let Some(direction) = direction else {
+        return Vec::new();
+    };
+    let x_step = axis_step(direction.x);
+    let y_step = axis_step(direction.y);
+    if x_step == 0 && y_step == 0 {
+        return Vec::new();
+    }
+
+    let mut chunk_positions = Vec::new();
+    if x_step != 0 {
+        let x = center_chunk_pos.x + x_step * CHUNK_CACHE_RETAIN_RADIUS;
+        for y_offset in -CHUNK_RADIUS..=CHUNK_RADIUS {
+            push_prefetch_chunk(
+                &mut chunk_positions,
+                Vec2::new(x, center_chunk_pos.y + y_offset),
+                dimensions,
+            );
+        }
+    }
+    if y_step != 0 {
+        let y = center_chunk_pos.y + y_step * CHUNK_CACHE_RETAIN_RADIUS;
+        for x_offset in -CHUNK_RADIUS..=CHUNK_RADIUS {
+            push_prefetch_chunk(
+                &mut chunk_positions,
+                Vec2::new(center_chunk_pos.x + x_offset, y),
+                dimensions,
+            );
+        }
+    }
+    chunk_positions
+}
+
+fn axis_step(value: f32) -> i32 {
+    if value > 0.35 {
+        1
+    } else if value < -0.35 {
+        -1
+    } else {
+        0
+    }
+}
+
+fn push_prefetch_chunk(
+    chunk_positions: &mut Vec<Vec2<i32>>,
+    chunk_pos: Vec2<i32>,
+    dimensions: Vec2<u32>,
+) {
+    if chunk_pos.x < 0
+        || chunk_pos.y < 0
+        || chunk_pos.x >= dimensions.x as i32
+        || chunk_pos.y >= dimensions.y as i32
+        || chunk_positions.contains(&chunk_pos)
+    {
+        return;
+    }
+    chunk_positions.push(chunk_pos);
 }
 
 fn chunk_within_retention_radius(
@@ -1512,6 +1613,8 @@ fn mesh_from_terrain_chunks(
     cached_chunks: usize,
     evicted_cached_chunks: usize,
     chunk_cache_retain_radius: i32,
+    prefetched_chunks: usize,
+    prefetch_candidates: usize,
     seed: u32,
     enabled_world_features: usize,
     wildlife_spawn_manifests: usize,
@@ -1606,6 +1709,8 @@ fn mesh_from_terrain_chunks(
         cached_mesh_chunks: cached_chunks,
         evicted_cached_chunks,
         chunk_cache_retain_radius,
+        prefetched_chunks,
+        prefetch_candidates,
         terrain_faces: builder.face_count,
         filled_blocks,
         liquid_blocks,
