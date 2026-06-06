@@ -74,6 +74,9 @@ Current milestone:
   prices from original `SitePrices` and `TradePricing` data so the browser
   interaction path now uses original economy pricing instead of static status
   copy;
+- open a browser-side trade panel when `E`/`Enter` targets a trader or market
+  board, showing the selected town, site stock, representative wares, quality,
+  and buy/sell coin prices from the original economy path;
 - preserve original `EntityInfo.body` categories in the web preview and render
   body-aware temporary silhouettes for humanoid, quadruped, flyer, fish, large,
   and object entities;
@@ -91,9 +94,8 @@ Next milestones:
 - replace the temporary rtsim-style profession roster markers with direct
   original rtsim NPC agents, profession inventories, dialogue, and loaded-agent
   state;
-- replace the status-line trader/market preview with the real Voxygen trade
-  HUD, pending-trade state, inventory slots, and server-authoritative trade
-  actions;
+- replace the browser-side trade preview panel with the real Voxygen trade HUD,
+  pending-trade state, inventory slots, and server-authoritative trade actions;
 - replace the visible 5x5 GPU chunk-buffer set with fully streamed loading,
   eviction, and independent chunk draw management around the live player
   position;

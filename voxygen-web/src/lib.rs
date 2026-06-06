@@ -5,15 +5,19 @@ mod world_preview;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use vek::Vec2;
 use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
-use web_sys::{Document, HtmlCanvasElement, KeyboardEvent, Window};
+use web_sys::{Document, Element, HtmlCanvasElement, KeyboardEvent, Window};
 use world_preview::{
     FLOATS_PER_VERTEX, OriginalEntityMarker, OriginalEntityMarkerShape, OriginalTerrainChunkMesh,
-    OriginalWorldMesh, OriginalWorldPreview,
+    OriginalWorldMesh, OriginalWorldPreview, TradePanelPreview,
 };
 
 const CANVAS_ID: &str = "voxworld-canvas";
 const DETAIL_ID: &str = "voxworld-detail";
 const STATUS_ID: &str = "voxworld-status";
+const TRADE_PANEL_ID: &str = "voxworld-trade-panel";
+const TRADE_TITLE_ID: &str = "voxworld-trade-title";
+const TRADE_STOCK_ID: &str = "voxworld-trade-stock";
+const TRADE_WARES_ID: &str = "voxworld-trade-wares";
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 const PLAYER_SPEED_BLOCKS_PER_SECOND: f32 = 14.0;
 const MAX_FRAME_DELTA_SECONDS: f32 = 0.05;
@@ -553,10 +557,9 @@ impl VoxygenWebClient {
         }
 
         if interact_requested {
-            self.player.last_interaction = Some(
-                self.world_preview
-                    .interaction_attempt_summary(self.player.wpos),
-            );
+            let interaction = self.world_preview.interaction_attempt(self.player.wpos);
+            set_trade_panel(interaction.trade_panel.as_ref());
+            self.player.last_interaction = Some(interaction.summary);
         }
 
         self.update_camera();
@@ -1404,4 +1407,85 @@ fn set_detail(message: &str) {
     {
         element.set_text_content(Some(message));
     }
+}
+
+fn set_trade_panel(panel: Option<&TradePanelPreview>) {
+    let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+        return;
+    };
+    let Some(container) = document.get_element_by_id(TRADE_PANEL_ID) else {
+        return;
+    };
+
+    let Some(panel) = panel else {
+        container.set_class_name("trade-panel trade-panel-hidden");
+        return;
+    };
+
+    container.set_class_name("trade-panel");
+    if let Some(title) = document.get_element_by_id(TRADE_TITLE_ID) {
+        title.set_text_content(Some(&panel.title));
+    }
+    if let Some(stock) = document.get_element_by_id(TRADE_STOCK_ID) {
+        stock.set_inner_html("");
+        if panel.stock.is_empty() {
+            append_text_element(&document, &stock, "div", "stock-pill", "stock unavailable");
+        } else {
+            for item in &panel.stock {
+                append_text_element(&document, &stock, "div", "stock-pill", item);
+            }
+        }
+    }
+    if let Some(wares) = document.get_element_by_id(TRADE_WARES_ID) {
+        wares.set_inner_html("");
+        if panel.wares.is_empty() {
+            append_text_element(&document, &wares, "div", "ware-row", "No priced wares");
+        } else {
+            for ware in &panel.wares {
+                append_ware_row(&document, &wares, ware);
+            }
+        }
+    }
+}
+
+fn append_text_element(
+    document: &Document,
+    parent: &Element,
+    tag: &str,
+    class_name: &str,
+    text: &str,
+) {
+    if let Ok(element) = document.create_element(tag) {
+        element.set_class_name(class_name);
+        element.set_text_content(Some(text));
+        let _ = parent.append_child(&element);
+    }
+}
+
+fn append_ware_row(document: &Document, parent: &Element, ware: &world_preview::TradePanelWare) {
+    let Ok(row) = document.create_element("div") else {
+        return;
+    };
+    row.set_class_name("ware-row");
+
+    if let Ok(name_cell) = document.create_element("div") {
+        name_cell.set_class_name("ware-name");
+        name_cell.set_text_content(Some(&ware.name));
+        append_text_element(document, &name_cell, "span", "ware-quality", &ware.quality);
+        let _ = row.append_child(&name_cell);
+    }
+    append_price_cell(document, &row, "Buy", &ware.buy);
+    append_price_cell(document, &row, "Sell", &ware.sell);
+
+    let _ = parent.append_child(&row);
+}
+
+fn append_price_cell(document: &Document, parent: &Element, label: &str, value: &str) {
+    let Ok(cell) = document.create_element("div") else {
+        return;
+    };
+    cell.set_class_name("ware-price");
+    append_text_element(document, &cell, "span", "ware-price-label", label);
+    append_text_element(document, &cell, "strong", "ware-price-value", value);
+    let _ = parent.append_child(&cell);
 }

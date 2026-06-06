@@ -86,6 +86,24 @@ pub struct OriginalWorldMesh {
     pub seed: u32,
 }
 
+pub struct InteractionAttempt {
+    pub summary: String,
+    pub trade_panel: Option<TradePanelPreview>,
+}
+
+pub struct TradePanelPreview {
+    pub title: String,
+    pub stock: Vec<String>,
+    pub wares: Vec<TradePanelWare>,
+}
+
+pub struct TradePanelWare {
+    pub name: String,
+    pub quality: String,
+    pub buy: String,
+    pub sell: String,
+}
+
 pub struct OriginalTerrainChunkMesh {
     pub chunk_pos: (i32, i32),
     pub vertices: Vec<f32>,
@@ -175,6 +193,22 @@ impl TradePreview {
         };
         format!("{stock}; {wares}")
     }
+
+    fn panel(&self, title: String) -> TradePanelPreview {
+        TradePanelPreview {
+            title,
+            stock: self
+                .stock
+                .iter()
+                .map(|(good, amount)| format!("{good:?} {}", format_stock_amount(*amount)))
+                .collect(),
+            wares: self
+                .wares
+                .iter()
+                .map(TradePreviewItem::panel_ware)
+                .collect(),
+        }
+    }
 }
 
 impl TradePreviewItem {
@@ -186,6 +220,15 @@ impl TradePreviewItem {
             format_coin_price(self.buy_coins),
             format_coin_price(self.sell_coins)
         )
+    }
+
+    fn panel_ware(&self) -> TradePanelWare {
+        TradePanelWare {
+            name: self.name.clone(),
+            quality: format!("{:?}", self.quality),
+            buy: format!("{}c", format_coin_price(self.buy_coins)),
+            sell: format!("{}c", format_coin_price(self.sell_coins)),
+        }
     }
 }
 
@@ -430,22 +473,28 @@ impl OriginalWorldPreview {
         )
     }
 
-    pub fn interaction_attempt_summary(&self, player_wpos: Vec2<f32>) -> String {
+    pub fn interaction_attempt(&self, player_wpos: Vec2<f32>) -> InteractionAttempt {
         let terrain_prop = self.nearest_terrain_prop(player_wpos, TERRAIN_INTERACTION_RANGE_BLOCKS);
         let entity = self.nearest_entity_target(player_wpos, ENTITY_INTERACTION_RANGE_BLOCKS);
-        let interaction = match (terrain_prop, entity) {
+        let (interaction, trade_panel) = match (terrain_prop, entity) {
             (Some(terrain_prop), Some(entity)) if terrain_prop.distance <= entity.distance() => {
-                terrain_prop.action_summary()
+                (terrain_prop.action_summary(), None)
             },
-            (Some(_), Some(entity)) => entity.action_summary(),
-            (Some(terrain_prop), None) => terrain_prop.action_summary(),
-            (None, Some(entity)) => entity.action_summary(),
-            (None, None) => format!(
-                "no target in reach (terrain {:.1}m, entity {:.1}m)",
-                TERRAIN_INTERACTION_RANGE_BLOCKS, ENTITY_INTERACTION_RANGE_BLOCKS
+            (Some(_), Some(entity)) => (entity.action_summary(), entity.trade_panel()),
+            (Some(terrain_prop), None) => (terrain_prop.action_summary(), None),
+            (None, Some(entity)) => (entity.action_summary(), entity.trade_panel()),
+            (None, None) => (
+                format!(
+                    "no target in reach (terrain {:.1}m, entity {:.1}m)",
+                    TERRAIN_INTERACTION_RANGE_BLOCKS, ENTITY_INTERACTION_RANGE_BLOCKS
+                ),
+                None,
             ),
         };
-        format!("Last interaction: {interaction}.")
+        InteractionAttempt {
+            summary: format!("Last interaction: {interaction}."),
+            trade_panel,
+        }
     }
 }
 
@@ -1236,6 +1285,17 @@ impl SiteMarkerFocus<'_> {
         }
         summary
     }
+
+    fn trade_panel(&self) -> Option<TradePanelPreview> {
+        self.marker.trade_preview.as_ref().map(|preview| {
+            preview.panel(format!(
+                "{} {} - {}",
+                site_marker_role_label(self.marker.kind),
+                self.marker.label,
+                self.marker.site_name
+            ))
+        })
+    }
 }
 
 enum EntityTargetFocus<'a> {
@@ -1262,6 +1322,13 @@ impl EntityTargetFocus<'_> {
         match self {
             EntityTargetFocus::Generated(focus) => focus.action_summary(),
             EntityTargetFocus::Site(focus) => focus.action_summary(),
+        }
+    }
+
+    fn trade_panel(&self) -> Option<TradePanelPreview> {
+        match self {
+            EntityTargetFocus::Generated(_) => None,
+            EntityTargetFocus::Site(focus) => focus.trade_panel(),
         }
     }
 }

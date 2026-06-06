@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Vox World Voxygen Web</title>
-    <link rel="stylesheet" href="./styles.css?v=20260607-001" />
+    <link rel="stylesheet" href="./styles.css?v=20260607-002" />
   </head>
   <body>
     <canvas id="voxworld-canvas" aria-label="Vox World Voxygen Web canvas"></canvas>
@@ -13,6 +13,19 @@
       <div class="boot-subtitle">Original WorldSim terrain</div>
       <div id="voxworld-status" class="status status-loading">Loading Voxygen Web...</div>
       <div id="voxworld-detail" class="detail">Preparing browser runtime...</div>
+    </aside>
+    <aside id="voxworld-trade-panel" class="trade-panel trade-panel-hidden" aria-live="polite">
+      <div class="trade-panel-head">
+        <div>
+          <div class="trade-kicker">Market</div>
+          <div id="voxworld-trade-title" class="trade-title">Trade</div>
+        </div>
+        <div class="trade-phase">Preview</div>
+      </div>
+      <div class="trade-section-label">Site Stock</div>
+      <div id="voxworld-trade-stock" class="stock-row"></div>
+      <div class="trade-section-label">Wares</div>
+      <div id="voxworld-trade-wares" class="wares-list"></div>
     </aside>
     <script type="module">
       const showBootError = (error) => {
@@ -28,7 +41,7 @@
       };
 
       try {
-        const assetVersion = "20260607-001";
+        const assetVersion = "20260607-002";
         const { default: init } = await import(
           `./pkg/voxworld_voxygen_web.js?v=${assetVersion}`
         );
