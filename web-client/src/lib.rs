@@ -37,7 +37,7 @@ struct SnapshotView {
     health: Option<StatView>,
     energy: Option<StatView>,
     is_dead: bool,
-    players_online: u32,
+    players_online: Vec<String>,
     entities: Vec<EntityView>,
     inventory: Option<InventoryView>,
     interaction: Option<InteractionView>,
@@ -312,6 +312,7 @@ fn summarize_server_message(data: &JsValue) -> String {
         },
         Some("snapshot") => {
             if let Some(snapshot) = parse_snapshot(&value) {
+                update_online_players(&snapshot.players_online);
                 LAST_SNAPSHOT.with(|last| {
                     *last.borrow_mut() = Some(snapshot.clone());
                 });
@@ -319,10 +320,7 @@ fn summarize_server_message(data: &JsValue) -> String {
 
             let username = string_property(&value, "username").unwrap_or_else(|| "web".to_owned());
             let in_game = bool_property(&value, "in_game");
-            let players = Reflect::get(&value, &JsValue::from_str("players_online"))
-                .ok()
-                .and_then(|players| players.dyn_into::<js_sys::Array>().ok())
-                .map_or(0, |players| players.length());
+            let players = string_array_property(&value, "players_online").len();
             let state = if in_game { "in game" } else { "joining" };
             format!("{username}: {state}, {players} online")
         },
@@ -361,6 +359,34 @@ fn remember_session_error(message: &str) {
 
 fn last_session_error() -> Option<String> { LAST_SESSION_ERROR.with(|slot| slot.borrow().clone()) }
 
+fn update_online_players(players: &[String]) {
+    let Some(element) = web_window()
+        .ok()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id("online-players"))
+    else {
+        return;
+    };
+
+    let mut names = players
+        .iter()
+        .filter(|name| !name.is_empty())
+        .take(6)
+        .cloned()
+        .collect::<Vec<_>>();
+    let overflow = players.len().saturating_sub(names.len());
+    let label = if names.is_empty() {
+        "Online: none".to_owned()
+    } else {
+        if overflow > 0 {
+            names.push(format!("+{overflow}"));
+        }
+        format!("Online: {}", names.join(", "))
+    };
+
+    element.set_text_content(Some(&label));
+}
+
 fn summarize_chat_message(value: &JsValue) -> String {
     let scope = string_property(value, "scope").unwrap_or_else(|| "world".to_owned());
     let message = string_property(value, "message").unwrap_or_else(|| "message".to_owned());
@@ -374,10 +400,7 @@ fn summarize_chat_message(value: &JsValue) -> String {
 fn parse_snapshot(value: &JsValue) -> Option<SnapshotView> {
     let username = string_property(value, "username").unwrap_or_else(|| "web".to_owned());
     let in_game = bool_property(value, "in_game");
-    let players_online = Reflect::get(value, &JsValue::from_str("players_online"))
-        .ok()
-        .and_then(|players| players.dyn_into::<js_sys::Array>().ok())
-        .map_or(0, |players| players.length());
+    let players_online = string_array_property(value, "players_online");
     let position = array3_property(value, "position");
     let health = stat_property(value, "health");
     let energy = stat_property(value, "energy");
@@ -456,6 +479,19 @@ fn parse_inventory_item(value: JsValue) -> Option<InventoryItemView> {
         name: string_property(&value, "name")?,
         amount: number_property(&value, "amount")? as u32,
     })
+}
+
+fn string_array_property(value: &JsValue, key: &str) -> Vec<String> {
+    Reflect::get(value, &JsValue::from_str(key))
+        .ok()
+        .and_then(|value| value.dyn_into::<js_sys::Array>().ok())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn interaction_property(value: &JsValue, key: &str) -> Option<InteractionView> {
@@ -1197,7 +1233,10 @@ fn draw_snapshot(
     let _ = context.fill_text(
         &format!(
             "{} online | {:.1}, {:.1}, {:.1}",
-            snapshot.players_online, origin_x, origin_y, origin_z
+            snapshot.players_online.len(),
+            origin_x,
+            origin_y,
+            origin_z
         ),
         28.0,
         62.0,

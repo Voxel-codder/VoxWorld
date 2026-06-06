@@ -95,7 +95,8 @@ body {
 }
 
 #server-summary,
-#connection-status {
+#connection-status,
+#online-players {
   min-height: 20px;
   margin: 10px 0 0;
   color: rgb(231 247 255 / 72%);
@@ -105,6 +106,10 @@ body {
 #server-summary {
   color: #9cdcbe;
   font-weight: 700;
+}
+
+#online-players {
+  overflow-wrap: anywhere;
 }
 
 .chat-log {
