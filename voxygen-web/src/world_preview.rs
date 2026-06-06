@@ -19,7 +19,9 @@ pub struct OriginalWorldMesh {
     pub vertices: Vec<f32>,
     pub indices: Vec<u32>,
     pub chunk_dimensions: (u32, u32),
-    pub chunk_pos: (i32, i32),
+    pub center_chunk_pos: (i32, i32),
+    pub chunk_patch: (u32, u32),
+    pub generated_chunks: usize,
     pub terrain_faces: usize,
     pub filled_blocks: usize,
     pub liquid_blocks: usize,
@@ -32,6 +34,7 @@ pub struct OriginalWorldMesh {
 pub fn build_original_world_mesh() -> Result<OriginalWorldMesh, String> {
     const SEED: u32 = 7;
     const MAP_LG: u32 = 5;
+    const CHUNK_RADIUS: i32 = 1;
 
     let threadpool = ThreadPoolBuilder::new()
         .num_threads(1)
@@ -68,19 +71,39 @@ pub fn build_original_world_mesh() -> Result<OriginalWorldMesh, String> {
         features: &preview_features,
         ..index_ref
     };
-    let chunk_pos = Vec2::new(dimensions.x as i32 / 2, dimensions.y as i32 / 2);
-    let (terrain_chunk, supplement) = world
-        .generate_chunk(preview_index, chunk_pos, None, || false, None)
-        .map_err(|_| format!("original World::generate_chunk cancelled at {chunk_pos:?}"))?;
+    let center_chunk_pos = Vec2::new(dimensions.x as i32 / 2, dimensions.y as i32 / 2);
+    let mut preview_chunks = Vec::new();
+    for y in -CHUNK_RADIUS..=CHUNK_RADIUS {
+        for x in -CHUNK_RADIUS..=CHUNK_RADIUS {
+            let chunk_pos = center_chunk_pos + Vec2::new(x, y);
+            if chunk_pos.x < 0
+                || chunk_pos.y < 0
+                || chunk_pos.x >= dimensions.x as i32
+                || chunk_pos.y >= dimensions.y as i32
+            {
+                continue;
+            }
+            let (terrain_chunk, supplement) = world
+                .generate_chunk(preview_index, chunk_pos, None, || false, None)
+                .map_err(|_| {
+                    format!("original World::generate_chunk cancelled at {chunk_pos:?}")
+                })?;
+            preview_chunks.push(GeneratedPreviewChunk {
+                pos: chunk_pos,
+                chunk: terrain_chunk,
+                entity_spawns: supplement.entity_spawns.len(),
+            });
+        }
+    }
 
-    mesh_from_terrain_chunk(
-        &terrain_chunk,
+    mesh_from_terrain_chunks(
+        &preview_chunks,
         dimensions,
-        chunk_pos,
+        center_chunk_pos,
+        CHUNK_RADIUS,
         SEED,
         enabled_world_features,
         wildlife_spawn_manifests,
-        supplement.entity_spawns.len(),
     )
 }
 
@@ -102,53 +125,80 @@ fn terrain_chunk_preview_features(features: &Features) -> Features {
     }
 }
 
-fn mesh_from_terrain_chunk(
-    chunk: &TerrainChunk,
+struct GeneratedPreviewChunk {
+    pos: Vec2<i32>,
+    chunk: TerrainChunk,
+    entity_spawns: usize,
+}
+
+fn mesh_from_terrain_chunks(
+    chunks: &[GeneratedPreviewChunk],
     dimensions: Vec2<u32>,
-    chunk_pos: Vec2<i32>,
+    center_chunk_pos: Vec2<i32>,
+    chunk_radius: i32,
     seed: u32,
     enabled_world_features: usize,
     wildlife_spawn_manifests: usize,
-    generated_entity_spawns: usize,
 ) -> Result<OriginalWorldMesh, String> {
-    let min_z = chunk.get_min_z();
-    let max_z = chunk.get_max_z();
+    if chunks.is_empty() {
+        return Err("original WorldSim generated no preview chunks".to_owned());
+    }
+
+    let min_z = chunks
+        .iter()
+        .map(|preview_chunk| preview_chunk.chunk.get_min_z())
+        .min()
+        .ok_or_else(|| "original preview chunks have no minimum z".to_owned())?;
+    let max_z = chunks
+        .iter()
+        .map(|preview_chunk| preview_chunk.chunk.get_max_z())
+        .max()
+        .ok_or_else(|| "original preview chunks have no maximum z".to_owned())?;
     if max_z <= min_z {
         return Err(format!(
-            "original TerrainChunk at {chunk_pos:?} has no vertical span"
+            "original TerrainChunk patch around {center_chunk_pos:?} has no vertical span"
         ));
     }
 
     let mut builder = BlockMeshBuilder::new((min_z + max_z) as f32 * 0.5);
     let mut filled_blocks = 0usize;
     let mut liquid_blocks = 0usize;
+    let mut generated_entity_spawns = 0usize;
 
-    for (pos, block) in chunk.iter_changed() {
-        let renderable = block.is_filled() || block.is_liquid();
-        if !renderable {
-            continue;
-        }
-        filled_blocks += usize::from(block.is_filled());
-        liquid_blocks += usize::from(block.is_liquid());
+    for preview_chunk in chunks {
+        generated_entity_spawns += preview_chunk.entity_spawns;
+        let chunk_origin = relative_chunk_origin(preview_chunk.pos, center_chunk_pos);
+        for (pos, block) in preview_chunk.chunk.iter_changed() {
+            let renderable = block.is_filled() || block.is_liquid();
+            if !renderable {
+                continue;
+            }
+            filled_blocks += usize::from(block.is_filled());
+            liquid_blocks += usize::from(block.is_liquid());
 
-        for face in Face::ALL {
-            if face_visible(chunk, pos, block, face) {
-                builder.add_face(pos, block, face);
+            for face in Face::ALL {
+                if face_visible(&preview_chunk.chunk, pos, block, face) {
+                    builder.add_face(pos, block, face, chunk_origin);
+                }
             }
         }
     }
 
     if builder.indices.is_empty() {
         return Err(format!(
-            "original TerrainChunk at {chunk_pos:?} produced no visible block faces"
+            "original TerrainChunk patch around {center_chunk_pos:?} produced no visible block \
+             faces"
         ));
     }
 
+    let patch_side = (chunk_radius * 2 + 1).max(1) as u32;
     Ok(OriginalWorldMesh {
         vertices: builder.vertices,
         indices: builder.indices,
         chunk_dimensions: (dimensions.x, dimensions.y),
-        chunk_pos: (chunk_pos.x, chunk_pos.y),
+        center_chunk_pos: (center_chunk_pos.x, center_chunk_pos.y),
+        chunk_patch: (patch_side, patch_side),
+        generated_chunks: chunks.len(),
         terrain_faces: builder.face_count,
         filled_blocks,
         liquid_blocks,
@@ -157,6 +207,12 @@ fn mesh_from_terrain_chunk(
         wildlife_spawn_manifests,
         seed,
     })
+}
+
+fn relative_chunk_origin(chunk_pos: Vec2<i32>, center_chunk_pos: Vec2<i32>) -> Vec2<i32> {
+    let rect_size = TerrainChunkSize::RECT_SIZE.as_::<i32>();
+    let chunk_delta = chunk_pos - center_chunk_pos;
+    Vec2::new(chunk_delta.x * rect_size.x, chunk_delta.y * rect_size.y)
 }
 
 fn face_visible(chunk: &TerrainChunk, pos: Vec3<i32>, block: &Block, face: Face) -> bool {
@@ -203,11 +259,11 @@ impl BlockMeshBuilder {
         }
     }
 
-    fn add_face(&mut self, pos: Vec3<i32>, block: &Block, face: Face) {
+    fn add_face(&mut self, pos: Vec3<i32>, block: &Block, face: Face, chunk_origin: Vec2<i32>) {
         let base = (self.vertices.len() / FLOATS_PER_VERTEX) as u32;
         let color = face.shade_color(block_color(block));
         for corner in face.corners(pos) {
-            let [x, y, z] = self.render_point(corner);
+            let [x, y, z] = self.render_point(corner, chunk_origin);
             self.vertices
                 .extend_from_slice(&[x, y, z, color[0], color[1], color[2]]);
         }
@@ -216,12 +272,12 @@ impl BlockMeshBuilder {
         self.face_count += 1;
     }
 
-    fn render_point(&self, point: [f32; 3]) -> [f32; 3] {
+    fn render_point(&self, point: [f32; 3], chunk_origin: Vec2<i32>) -> [f32; 3] {
         let chunk_center = TerrainChunkSize::RECT_SIZE.x as f32 * 0.5;
         [
-            (point[0] - chunk_center) * 0.64,
+            (point[0] + chunk_origin.x as f32 - chunk_center) * 0.64,
             (point[2] - self.vertical_origin) * 0.28,
-            (point[1] - chunk_center) * 0.64,
+            (point[1] + chunk_origin.y as f32 - chunk_center) * 0.64,
         ]
     }
 }

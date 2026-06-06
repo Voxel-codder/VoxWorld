@@ -124,7 +124,8 @@ impl VoxygenWebClient {
         surface.configure(&device, &config);
 
         let depth_view = create_depth_view(&device, &config);
-        let camera_matrix = camera_view_projection(width as f32 / height.max(1) as f32);
+        let camera_matrix =
+            camera_view_projection(width as f32 / height.max(1) as f32, &world_mesh);
         let camera_buffer = create_buffer_with_data(
             &device,
             &matrix_bytes(&camera_matrix),
@@ -247,12 +248,16 @@ impl VoxygenWebClient {
 
     fn scene_summary(&self) -> String {
         let (chunks_x, chunks_y) = self.world_mesh.chunk_dimensions;
+        let (patch_x, patch_y) = self.world_mesh.chunk_patch;
         format!(
-            "Seed {} generated original TerrainChunk {:?} inside a {}x{} WorldSim. WebGPU block \
-             faces: {}. Filled blocks: {}. Liquid blocks: {}. Entity spawns: {}. World features \
-             loaded: {}. Wildlife spawn manifests: {}.",
+            "Seed {} generated {} original TerrainChunks in a {}x{} patch around {:?} inside a \
+             {}x{} WorldSim. WebGPU block faces: {}. Filled blocks: {}. Liquid blocks: {}. Entity \
+             spawns: {}. World features loaded: {}. Wildlife spawn manifests: {}.",
             self.world_mesh.seed,
-            self.world_mesh.chunk_pos,
+            self.world_mesh.generated_chunks,
+            patch_x,
+            patch_y,
+            self.world_mesh.center_chunk_pos,
             chunks_x,
             chunks_y,
             self.world_mesh.terrain_faces,
@@ -380,12 +385,18 @@ fn create_buffer_with_data(
     buffer
 }
 
-fn camera_view_projection(aspect: f32) -> [f32; 16] {
-    let eye = [28.0, 24.0, 36.0];
-    let target = [0.0, 2.5, 0.0];
+fn camera_view_projection(aspect: f32, world_mesh: &OriginalWorldMesh) -> [f32; 16] {
+    let patch_width = world_mesh.chunk_patch.0.max(world_mesh.chunk_patch.1) as f32;
+    let eye_distance = (patch_width * 28.0).max(42.0);
+    let eye = [
+        eye_distance * 0.72,
+        eye_distance * 0.46,
+        eye_distance * 0.86,
+    ];
+    let target = [0.0, 4.0, 0.0];
     let up = [0.0, 1.0, 0.0];
     let view = look_at_rh(eye, target, up);
-    let projection = perspective_rh(48.0_f32.to_radians(), aspect.max(0.1), 0.1, 180.0);
+    let projection = perspective_rh(50.0_f32.to_radians(), aspect.max(0.1), 0.1, 360.0);
     mul_mat4(projection, view)
 }
 

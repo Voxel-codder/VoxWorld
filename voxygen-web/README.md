@@ -18,9 +18,9 @@ Current milestone:
 - generate a small original `WorldSim` in the browser build path;
 - run original spot placement and enable terrain decorations, trees, shrubs, and
   spot structures in the generated preview chunk;
-- call the real `World::generate_chunk` path and convert the generated
-  `TerrainChunk` blocks into a WebGPU 3D block-face mesh with a camera,
-  vertex/index buffers, and depth testing;
+- call the real `World::generate_chunk` path for a 3x3 patch around the preview
+  camera and convert the generated `TerrainChunk` blocks into a merged WebGPU
+  3D block-face mesh with a camera, vertex/index buffers, and depth testing;
 - keep this as the stable place for future Voxygen renderer/HUD migration;
 - avoid extending the temporary 2D canvas client as if it were the final game.
 
@@ -28,8 +28,8 @@ Next milestones:
 
 - replace the temporary block-face mesh with Voxygen's real greedy terrain mesh
   and atlas/material pipeline;
-- stream and render multiple generated chunks around the camera instead of a
-  single fixed preview chunk;
+- replace the fixed 3x3 preview patch with streaming generated chunks around the
+  live camera/player position;
 - attach player/session state so the scene follows the live character instead
   of a fixed terrain camera;
 - introduce a browser-safe client transport that maps Voxygen networking onto a
