@@ -10,6 +10,7 @@ use common::{
     comp::{
         self, ChatType, Content, ControllerInputs, InputKind,
         body::humanoid::{Body, BodyType, Species},
+        inventory::slot::EquipSlot,
     },
     uid::Uid,
     util::dir::Dir,
@@ -24,6 +25,7 @@ use veloren_client::{Client, ClientType, Event, Join, WorldExt, addr::Connection
 const TICK: Duration = Duration::from_millis(50);
 const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(250);
 const SNAPSHOT_ENTITY_LIMIT: usize = 96;
+const SNAPSHOT_INVENTORY_ITEM_LIMIT: usize = 8;
 const WEB_VIEW_DISTANCE: ViewDistances = ViewDistances {
     terrain: 5,
     entity: 5,
@@ -101,6 +103,7 @@ enum SessionMessage {
         players_online: Vec<String>,
         character_count: usize,
         entities: Vec<SnapshotEntity>,
+        inventory: Option<SnapshotInventory>,
     },
     Event {
         message: String,
@@ -124,6 +127,21 @@ struct SnapshotEntity {
     position: [f32; 3],
     distance: f32,
     health: Option<PlayerStat>,
+}
+
+#[derive(Debug, Serialize)]
+struct SnapshotInventory {
+    occupied_slots: usize,
+    total_slots: usize,
+    mainhand: Option<SnapshotItem>,
+    offhand: Option<SnapshotItem>,
+    items: Vec<SnapshotItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct SnapshotItem {
+    name: String,
+    amount: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -475,6 +493,7 @@ fn send_snapshot(
         .map(|position| [position.x, position.y, position.z]);
     let players_online = client.players().map(str::to_owned).collect();
     let entities = snapshot_entities(client);
+    let inventory = snapshot_inventory(client);
     let (health, energy) = snapshot_player_stats(client);
 
     send_json(outbound, SessionMessage::Snapshot {
@@ -486,6 +505,7 @@ fn send_snapshot(
         players_online,
         character_count: client.character_list().characters.len(),
         entities,
+        inventory,
     });
 }
 
@@ -554,6 +574,41 @@ fn snapshot_entities(client: &Client) -> Vec<SnapshotEntity> {
     entities.sort_by(|a, b| a.distance.total_cmp(&b.distance));
     entities.truncate(SNAPSHOT_ENTITY_LIMIT);
     entities
+}
+
+fn snapshot_inventory(client: &Client) -> Option<SnapshotInventory> {
+    let inventories = client.state().ecs().read_storage::<comp::Inventory>();
+    let inventory = inventories.get(client.entity())?;
+    let total_slots = inventory.capacity();
+    let mut occupied_slots = 0;
+    let mut items = Vec::new();
+
+    for item in inventory.slots().filter_map(|slot| slot.as_ref()) {
+        occupied_slots += 1;
+        if items.len() < SNAPSHOT_INVENTORY_ITEM_LIMIT {
+            items.push(snapshot_item(item));
+        }
+    }
+
+    Some(SnapshotInventory {
+        occupied_slots,
+        total_slots,
+        mainhand: inventory
+            .equipped(EquipSlot::ActiveMainhand)
+            .map(snapshot_item),
+        offhand: inventory
+            .equipped(EquipSlot::ActiveOffhand)
+            .map(snapshot_item),
+        items,
+    })
+}
+
+#[allow(deprecated)]
+fn snapshot_item(item: &comp::Item) -> SnapshotItem {
+    SnapshotItem {
+        name: item.legacy_name().to_string(),
+        amount: item.amount(),
+    }
 }
 
 fn browser_chat_message(client: &Client, message: &comp::ChatMsg) -> SessionMessage {

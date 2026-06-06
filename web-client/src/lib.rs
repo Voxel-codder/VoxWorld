@@ -37,6 +37,7 @@ struct SnapshotView {
     energy: Option<StatView>,
     players_online: u32,
     entities: Vec<EntityView>,
+    inventory: Option<InventoryView>,
 }
 
 #[derive(Clone)]
@@ -53,6 +54,21 @@ struct EntityView {
     is_self: bool,
     position: [f64; 3],
     health: Option<StatView>,
+}
+
+#[derive(Clone)]
+struct InventoryView {
+    occupied_slots: u32,
+    total_slots: u32,
+    mainhand: Option<InventoryItemView>,
+    offhand: Option<InventoryItemView>,
+    items: Vec<InventoryItemView>,
+}
+
+#[derive(Clone)]
+struct InventoryItemView {
+    name: String,
+    amount: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -337,6 +353,7 @@ fn parse_snapshot(value: &JsValue) -> Option<SnapshotView> {
     let position = array3_property(value, "position");
     let health = stat_property(value, "health");
     let energy = stat_property(value, "energy");
+    let inventory = inventory_property(value, "inventory");
     let entities = Reflect::get(value, &JsValue::from_str("entities"))
         .ok()
         .and_then(|entities| entities.dyn_into::<js_sys::Array>().ok())
@@ -364,6 +381,48 @@ fn parse_snapshot(value: &JsValue) -> Option<SnapshotView> {
         energy,
         players_online,
         entities,
+        inventory,
+    })
+}
+
+fn inventory_property(value: &JsValue, key: &str) -> Option<InventoryView> {
+    let inventory = Reflect::get(value, &JsValue::from_str(key)).ok()?;
+    if inventory.is_null() || inventory.is_undefined() {
+        return None;
+    }
+
+    let occupied_slots = number_property(&inventory, "occupied_slots")? as u32;
+    let total_slots = number_property(&inventory, "total_slots")? as u32;
+    let mainhand = inventory_item_property(&inventory, "mainhand");
+    let offhand = inventory_item_property(&inventory, "offhand");
+    let items = Reflect::get(&inventory, &JsValue::from_str("items"))
+        .ok()
+        .and_then(|items| items.dyn_into::<js_sys::Array>().ok())
+        .map(|items| items.iter().filter_map(parse_inventory_item).collect())
+        .unwrap_or_default();
+
+    Some(InventoryView {
+        occupied_slots,
+        total_slots,
+        mainhand,
+        offhand,
+        items,
+    })
+}
+
+fn inventory_item_property(value: &JsValue, key: &str) -> Option<InventoryItemView> {
+    let item = Reflect::get(value, &JsValue::from_str(key)).ok()?;
+    parse_inventory_item(item)
+}
+
+fn parse_inventory_item(value: JsValue) -> Option<InventoryItemView> {
+    if value.is_null() || value.is_undefined() {
+        return None;
+    }
+
+    Some(InventoryItemView {
+        name: string_property(&value, "name")?,
+        amount: number_property(&value, "amount")? as u32,
     })
 }
 
@@ -1101,6 +1160,62 @@ fn draw_snapshot(
 
     if let Some(energy) = &snapshot.energy {
         draw_stat_bar(context, 28.0, 108.0, 184.0, "Energy", energy, "#d8b15f");
+    }
+
+    if let Some(inventory) = &snapshot.inventory {
+        draw_inventory(context, 28.0, 140.0, inventory);
+    }
+}
+
+#[allow(deprecated)]
+fn draw_inventory(context: &CanvasRenderingContext2d, x: f64, y: f64, inventory: &InventoryView) {
+    let width = 260.0;
+    let row_height = 17.0;
+    let rows = 2 + inventory.items.len().min(5);
+    let height = 18.0 + row_height * rows as f64;
+
+    context.set_fill_style(&JsValue::from_str("rgba(0, 0, 0, 0.34)"));
+    context.fill_rect(x, y, width, height);
+    context.set_stroke_style(&JsValue::from_str("rgba(231, 247, 255, 0.20)"));
+    context.stroke_rect(x, y, width, height);
+
+    context.set_fill_style(&JsValue::from_str("#e7f7ff"));
+    context.set_font("700 12px system-ui, sans-serif");
+    let _ = context.fill_text(
+        &format!(
+            "Inventory {}/{}",
+            inventory.occupied_slots, inventory.total_slots
+        ),
+        x + 8.0,
+        y + 14.0,
+    );
+
+    context.set_font("12px system-ui, sans-serif");
+    context.set_fill_style(&JsValue::from_str("rgba(231, 247, 255, 0.78)"));
+    let mainhand = item_label(inventory.mainhand.as_ref());
+    let offhand = item_label(inventory.offhand.as_ref());
+    let _ = context.fill_text(&format!("Main: {mainhand}"), x + 8.0, y + 32.0);
+    let _ = context.fill_text(&format!("Off: {offhand}"), x + 8.0, y + 49.0);
+
+    for (index, item) in inventory.items.iter().take(5).enumerate() {
+        let amount = if item.amount > 1 {
+            format!(" x{}", item.amount)
+        } else {
+            String::new()
+        };
+        let _ = context.fill_text(
+            &format!("{}{}", item.name, amount),
+            x + 8.0,
+            y + 68.0 + row_height * index as f64,
+        );
+    }
+}
+
+fn item_label(item: Option<&InventoryItemView>) -> String {
+    match item {
+        Some(item) if item.amount > 1 => format!("{} x{}", item.name, item.amount),
+        Some(item) => item.name.clone(),
+        None => "-".to_owned(),
     }
 }
 
