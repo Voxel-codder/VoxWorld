@@ -45,6 +45,8 @@ pub struct OriginalWorldMesh {
     pub generated_chunks: usize,
     pub newly_generated_chunks: usize,
     pub cached_chunks: usize,
+    pub newly_meshed_chunks: usize,
+    pub cached_mesh_chunks: usize,
     pub terrain_faces: usize,
     pub filled_blocks: usize,
     pub liquid_blocks: usize,
@@ -202,10 +204,12 @@ impl OriginalWorldPreview {
                         format!("original World::generate_chunk cancelled at {chunk_pos:?}")
                     })?
             };
+            let mesh = build_chunk_mesh_fragment(&terrain_chunk);
             self.chunk_cache.insert(key, GeneratedPreviewChunk {
                 pos: *chunk_pos,
                 chunk: terrain_chunk,
                 entity_spawns: supplement.entity_spawns,
+                mesh,
             });
             newly_generated_chunks += 1;
         }
@@ -275,6 +279,15 @@ struct GeneratedPreviewChunk {
     pos: Vec2<i32>,
     chunk: TerrainChunk,
     entity_spawns: Vec<EntitySpawn>,
+    mesh: ChunkMeshFragment,
+}
+
+struct ChunkMeshFragment {
+    vertices: Vec<f32>,
+    indices: Vec<u32>,
+    face_count: usize,
+    filled_blocks: usize,
+    liquid_blocks: usize,
 }
 
 fn mesh_from_terrain_chunks(
@@ -308,12 +321,12 @@ fn mesh_from_terrain_chunks(
         ));
     }
 
-    let mut builder = BlockMeshBuilder::new((min_z + max_z) as f32 * 0.5);
+    let vertical_origin = (min_z + max_z) as f32 * 0.5;
+    let mut builder = PatchMeshBuilder::new(vertical_origin);
     let mut filled_blocks = 0usize;
     let mut liquid_blocks = 0usize;
     let mut generated_entity_spawns = 0usize;
     let mut entity_markers = Vec::new();
-    let vertical_origin = (min_z + max_z) as f32 * 0.5;
 
     for preview_chunk in chunks {
         generated_entity_spawns += count_entity_spawns(&preview_chunk.entity_spawns);
@@ -324,20 +337,9 @@ fn mesh_from_terrain_chunks(
             &mut entity_markers,
         );
         let chunk_origin = relative_chunk_origin(preview_chunk.pos, center_chunk_pos);
-        for (pos, block) in preview_chunk.chunk.iter_changed() {
-            let renderable = block.is_filled() || block.is_liquid();
-            if !renderable {
-                continue;
-            }
-            filled_blocks += usize::from(block.is_filled());
-            liquid_blocks += usize::from(block.is_liquid());
-
-            for face in Face::ALL {
-                if face_visible(&preview_chunk.chunk, pos, block, face) {
-                    builder.add_face(pos, block, face, chunk_origin);
-                }
-            }
-        }
+        builder.append_chunk_mesh(&preview_chunk.mesh, chunk_origin);
+        filled_blocks += preview_chunk.mesh.filled_blocks;
+        liquid_blocks += preview_chunk.mesh.liquid_blocks;
     }
 
     if builder.indices.is_empty() {
@@ -359,6 +361,8 @@ fn mesh_from_terrain_chunks(
         generated_chunks: chunks.len(),
         newly_generated_chunks,
         cached_chunks,
+        newly_meshed_chunks: newly_generated_chunks,
+        cached_mesh_chunks: cached_chunks,
         terrain_faces: builder.face_count,
         filled_blocks,
         liquid_blocks,
@@ -377,6 +381,35 @@ fn count_entity_spawns(entity_spawns: &[EntitySpawn]) -> usize {
             EntitySpawn::Group(group) => group.len(),
         })
         .sum()
+}
+
+fn build_chunk_mesh_fragment(chunk: &TerrainChunk) -> ChunkMeshFragment {
+    let mut builder = BlockMeshBuilder::new();
+    let mut filled_blocks = 0usize;
+    let mut liquid_blocks = 0usize;
+
+    for (pos, block) in chunk.iter_changed() {
+        let renderable = block.is_filled() || block.is_liquid();
+        if !renderable {
+            continue;
+        }
+        filled_blocks += usize::from(block.is_filled());
+        liquid_blocks += usize::from(block.is_liquid());
+
+        for face in Face::ALL {
+            if face_visible(chunk, pos, block, face) {
+                builder.add_face(pos, block, face);
+            }
+        }
+    }
+
+    ChunkMeshFragment {
+        vertices: builder.vertices,
+        indices: builder.indices,
+        face_count: builder.face_count,
+        filled_blocks,
+        liquid_blocks,
+    }
 }
 
 fn append_entity_markers(
@@ -504,14 +537,14 @@ fn count_enabled_features(features: &Features) -> usize {
     .count()
 }
 
-struct BlockMeshBuilder {
+struct PatchMeshBuilder {
     vertices: Vec<f32>,
     indices: Vec<u32>,
     face_count: usize,
     vertical_origin: f32,
 }
 
-impl BlockMeshBuilder {
+impl PatchMeshBuilder {
     fn new(vertical_origin: f32) -> Self {
         Self {
             vertices: Vec::new(),
@@ -521,11 +554,48 @@ impl BlockMeshBuilder {
         }
     }
 
-    fn add_face(&mut self, pos: Vec3<i32>, block: &Block, face: Face, chunk_origin: Vec2<i32>) {
+    fn append_chunk_mesh(&mut self, mesh: &ChunkMeshFragment, chunk_origin: Vec2<i32>) {
+        let base = (self.vertices.len() / FLOATS_PER_VERTEX) as u32;
+        for vertex in mesh.vertices.chunks_exact(FLOATS_PER_VERTEX) {
+            let [x, y, z] = self.render_point([vertex[0], vertex[1], vertex[2]], chunk_origin);
+            self.vertices
+                .extend_from_slice(&[x, y, z, vertex[3], vertex[4], vertex[5]]);
+        }
+        self.indices
+            .extend(mesh.indices.iter().map(|index| base + *index));
+        self.face_count += mesh.face_count;
+    }
+
+    fn render_point(&self, point: [f32; 3], chunk_origin: Vec2<i32>) -> [f32; 3] {
+        let chunk_center = TerrainChunkSize::RECT_SIZE.x as f32 * 0.5;
+        [
+            (point[0] + chunk_origin.x as f32 - chunk_center) * TERRAIN_HORIZONTAL_SCALE,
+            (point[1] - self.vertical_origin) * 0.28,
+            (point[2] + chunk_origin.y as f32 - chunk_center) * TERRAIN_HORIZONTAL_SCALE,
+        ]
+    }
+}
+
+struct BlockMeshBuilder {
+    vertices: Vec<f32>,
+    indices: Vec<u32>,
+    face_count: usize,
+}
+
+impl BlockMeshBuilder {
+    fn new() -> Self {
+        Self {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            face_count: 0,
+        }
+    }
+
+    fn add_face(&mut self, pos: Vec3<i32>, block: &Block, face: Face) {
         let base = (self.vertices.len() / FLOATS_PER_VERTEX) as u32;
         let color = face.shade_color(block_color(block));
         for corner in face.corners(pos) {
-            let [x, y, z] = self.render_point(corner, chunk_origin);
+            let [x, y, z] = Self::render_point(corner);
             self.vertices
                 .extend_from_slice(&[x, y, z, color[0], color[1], color[2]]);
         }
@@ -534,14 +604,7 @@ impl BlockMeshBuilder {
         self.face_count += 1;
     }
 
-    fn render_point(&self, point: [f32; 3], chunk_origin: Vec2<i32>) -> [f32; 3] {
-        let chunk_center = TerrainChunkSize::RECT_SIZE.x as f32 * 0.5;
-        [
-            (point[0] + chunk_origin.x as f32 - chunk_center) * TERRAIN_HORIZONTAL_SCALE,
-            (point[2] - self.vertical_origin) * 0.28,
-            (point[1] + chunk_origin.y as f32 - chunk_center) * TERRAIN_HORIZONTAL_SCALE,
-        ]
-    }
+    fn render_point(point: [f32; 3]) -> [f32; 3] { [point[0], point[2], point[1]] }
 }
 
 #[derive(Clone, Copy)]

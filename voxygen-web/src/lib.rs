@@ -543,10 +543,10 @@ impl VoxygenWebClient {
         let (patch_x, patch_y) = self.world_mesh.chunk_patch;
         format!(
             "Seed {} rendered {} original TerrainChunks in a {}x{} patch around {:?} inside a \
-             {}x{} WorldSim. New chunks this update: {}. Chunk cache: {}. Player block position: \
-             ({:.1}, {:.1}). WebGPU block faces: {}. Filled blocks: {}. Liquid blocks: {}. \
-             Visible entity markers: {}. Entity spawns: {}. World features loaded: {}. Wildlife \
-             spawn manifests: {}.",
+             {}x{} WorldSim. New chunks/meshes this update: {}/{}. Chunk/mesh cache: {}/{}. \
+             Player block position: ({:.1}, {:.1}). WebGPU block faces: {}. Filled blocks: {}. \
+             Liquid blocks: {}. Visible entity markers: {}. Entity spawns: {}. World features \
+             loaded: {}. Wildlife spawn manifests: {}.",
             self.world_mesh.seed,
             self.world_mesh.generated_chunks,
             patch_x,
@@ -555,7 +555,9 @@ impl VoxygenWebClient {
             chunks_x,
             chunks_y,
             self.world_mesh.newly_generated_chunks,
+            self.world_mesh.newly_meshed_chunks,
             self.world_mesh.cached_chunks,
+            self.world_mesh.cached_mesh_chunks,
             self.player.wpos.x,
             self.player.wpos.y,
             self.world_mesh.terrain_faces,
