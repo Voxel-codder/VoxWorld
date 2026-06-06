@@ -29,9 +29,9 @@ Current milestone:
 - call the real `World::generate_chunk` path for a 5x5 patch around the preview
   camera and convert the generated `TerrainChunk` blocks into a merged WebGPU
   3D block-face mesh with a camera, vertex/index buffers, and depth testing;
-- greedily merge same-height, same-color generated terrain top faces inside
-  each chunk so the browser mesh begins moving away from one-quad-per-block
-  terrain and toward Voxygen-style terrain meshing;
+- greedily merge same-plane, same-color generated terrain faces for all six
+  block directions inside each chunk so the browser mesh moves away from
+  one-quad-per-block terrain and toward Voxygen-style terrain meshing;
 - cache generated original `TerrainChunk` data, supplements, and chunk-local
   block-face mesh fragments so moving across chunk boundaries only generates
   newly visible chunks and meshes;
@@ -118,8 +118,8 @@ Current milestone:
 
 Next milestones:
 
-- extend greedy terrain meshing beyond top faces, then replace the temporary
-  block material colors with Voxygen's real atlas/material pipeline;
+- replace the temporary block material colors with Voxygen's real
+  atlas/material pipeline;
 - replace oriented entity and player temporary silhouettes with Voxygen body
   meshes, loadouts, and animation state;
 - replace the temporary rtsim-style profession roster markers with direct

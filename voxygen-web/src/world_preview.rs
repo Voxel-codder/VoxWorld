@@ -1904,7 +1904,7 @@ fn build_chunk_mesh_fragment(chunk: &TerrainChunk, chunk_pos: Vec2<i32>) -> Chun
     let mut filled_blocks = 0usize;
     let mut liquid_blocks = 0usize;
     let mut terrain_props = Vec::new();
-    let mut top_faces = Vec::new();
+    let mut greedy_faces = Vec::new();
 
     for (pos, block) in chunk.iter_changed() {
         if let Some(sprite) = block
@@ -1924,18 +1924,15 @@ fn build_chunk_mesh_fragment(chunk: &TerrainChunk, chunk_pos: Vec2<i32>) -> Chun
 
         for face in Face::ALL {
             if face_visible(chunk, pos, block, face) {
-                if face == Face::PosZ {
-                    top_faces.push(GreedyTopFace::new(
-                        pos,
-                        face.shade_color(block_color(block)),
-                    ));
-                } else {
-                    builder.add_face(pos, block, face);
-                }
+                greedy_faces.push(GreedyFace::new(
+                    pos,
+                    face,
+                    face.shade_color(block_color(block)),
+                ));
             }
         }
     }
-    builder.add_greedy_top_faces(top_faces);
+    builder.add_greedy_faces(greedy_faces);
 
     ChunkMeshFragment {
         vertices: builder.vertices,
@@ -2243,22 +2240,9 @@ impl BlockMeshBuilder {
         }
     }
 
-    fn add_face(&mut self, pos: Vec3<i32>, block: &Block, face: Face) {
-        let base = (self.vertices.len() / FLOATS_PER_VERTEX) as u32;
-        let color = face.shade_color(block_color(block));
-        for corner in face.corners(pos) {
-            let [x, y, z] = Self::render_point(corner);
-            self.vertices
-                .extend_from_slice(&[x, y, z, color[0], color[1], color[2]]);
-        }
-        self.indices
-            .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-        self.face_count += 1;
-    }
-
-    fn add_greedy_top_faces(&mut self, top_faces: Vec<GreedyTopFace>) {
-        let mut groups: HashMap<GreedyTopFaceKey, Vec<GreedyTopFace>> = HashMap::new();
-        for face in top_faces {
+    fn add_greedy_faces(&mut self, greedy_faces: Vec<GreedyFace>) {
+        let mut groups: HashMap<GreedyFaceKey, Vec<GreedyFace>> = HashMap::new();
+        for face in greedy_faces {
             groups.entry(face.key()).or_default().push(face);
         }
 
@@ -2266,22 +2250,22 @@ impl BlockMeshBuilder {
             let Some(first_face) = faces.first().copied() else {
                 continue;
             };
-            let mut cells: HashMap<(i32, i32), GreedyTopFace> = faces
+            let mut cells: HashMap<(i32, i32), GreedyFace> = faces
                 .into_iter()
-                .map(|face| ((face.x, face.y), face))
+                .map(|face| ((face.u, face.v), face))
                 .collect();
 
-            while let Some(start_key) = cells.keys().min_by_key(|(x, y)| (*y, *x)).copied() {
+            while let Some(start_key) = cells.keys().min_by_key(|(u, v)| (*v, *u)).copied() {
                 let start = cells[&start_key];
                 let mut width = 1;
-                while cells.contains_key(&(start.x + width, start.y)) {
+                while cells.contains_key(&(start.u + width, start.v)) {
                     width += 1;
                 }
 
                 let mut depth = 1;
                 'depth: loop {
-                    for x_offset in 0..width {
-                        if !cells.contains_key(&(start.x + x_offset, start.y + depth)) {
+                    for u_offset in 0..width {
+                        if !cells.contains_key(&(start.u + u_offset, start.v + depth)) {
                             break 'depth;
                         }
                     }
@@ -2289,14 +2273,15 @@ impl BlockMeshBuilder {
                 }
 
                 for y_offset in 0..depth {
-                    for x_offset in 0..width {
-                        cells.remove(&(start.x + x_offset, start.y + y_offset));
+                    for u_offset in 0..width {
+                        cells.remove(&(start.u + u_offset, start.v + y_offset));
                     }
                 }
-                self.add_top_quad(
-                    start.x,
-                    start.y,
-                    first_face.z,
+                self.add_greedy_quad(
+                    first_face.face,
+                    first_face.plane,
+                    start.u,
+                    start.v,
                     width,
                     depth,
                     first_face.color,
@@ -2305,14 +2290,18 @@ impl BlockMeshBuilder {
         }
     }
 
-    fn add_top_quad(&mut self, x: i32, y: i32, z: i32, width: i32, depth: i32, color: [f32; 3]) {
+    fn add_greedy_quad(
+        &mut self,
+        face: Face,
+        plane: i32,
+        u: i32,
+        v: i32,
+        width: i32,
+        depth: i32,
+        color: [f32; 3],
+    ) {
         let base = (self.vertices.len() / FLOATS_PER_VERTEX) as u32;
-        let x = x as f32;
-        let y = y as f32;
-        let z = z as f32;
-        let x1 = x + width as f32;
-        let y1 = y + depth as f32;
-        for corner in [[x, y, z], [x1, y, z], [x1, y1, z], [x, y1, z]] {
+        for corner in face.greedy_corners(plane, u, v, width, depth) {
             let [rx, ry, rz] = Self::render_point(corner);
             self.vertices
                 .extend_from_slice(&[rx, ry, rz, color[0], color[1], color[2]]);
@@ -2426,36 +2415,41 @@ impl BlockMeshBuilder {
 }
 
 #[derive(Clone, Copy)]
-struct GreedyTopFace {
-    x: i32,
-    y: i32,
-    z: i32,
+struct GreedyFace {
+    face: Face,
+    plane: i32,
+    u: i32,
+    v: i32,
     color: [f32; 3],
     color_key: [u16; 3],
 }
 
-impl GreedyTopFace {
-    fn new(pos: Vec3<i32>, color: [f32; 3]) -> Self {
+impl GreedyFace {
+    fn new(pos: Vec3<i32>, face: Face, color: [f32; 3]) -> Self {
+        let (plane, u, v) = face.greedy_axes(pos);
         Self {
-            x: pos.x,
-            y: pos.y,
-            z: pos.z + 1,
+            face,
+            plane,
+            u,
+            v,
             color,
             color_key: quantized_color_key(color),
         }
     }
 
-    fn key(self) -> GreedyTopFaceKey {
-        GreedyTopFaceKey {
-            z: self.z,
+    fn key(self) -> GreedyFaceKey {
+        GreedyFaceKey {
+            face: self.face,
+            plane: self.plane,
             color: self.color_key,
         }
     }
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
-struct GreedyTopFaceKey {
-    z: i32,
+struct GreedyFaceKey {
+    face: Face,
+    plane: i32,
     color: [u16; 3],
 }
 
@@ -2623,7 +2617,7 @@ fn sprite_face_color(color: [f32; 3], face_index: usize) -> [f32; 3] {
     scale_color(color, shade)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
 enum Face {
     PosX,
     NegX,
@@ -2664,21 +2658,31 @@ impl Face {
         color.map(|channel| (channel * shade).min(1.0))
     }
 
-    fn corners(self, pos: Vec3<i32>) -> [[f32; 3]; 4] {
-        let x = pos.x as f32;
-        let y = pos.y as f32;
-        let z = pos.z as f32;
-        let x1 = x + 1.0;
-        let y1 = y + 1.0;
-        let z1 = z + 1.0;
+    fn greedy_axes(self, pos: Vec3<i32>) -> (i32, i32, i32) {
+        match self {
+            Self::PosX => (pos.x + 1, pos.y, pos.z),
+            Self::NegX => (pos.x, pos.y, pos.z),
+            Self::PosY => (pos.y + 1, pos.x, pos.z),
+            Self::NegY => (pos.y, pos.x, pos.z),
+            Self::PosZ => (pos.z + 1, pos.x, pos.y),
+            Self::NegZ => (pos.z, pos.x, pos.y),
+        }
+    }
+
+    fn greedy_corners(self, plane: i32, u: i32, v: i32, width: i32, depth: i32) -> [[f32; 3]; 4] {
+        let p = plane as f32;
+        let u0 = u as f32;
+        let v0 = v as f32;
+        let u1 = (u + width) as f32;
+        let v1 = (v + depth) as f32;
 
         match self {
-            Self::PosX => [[x1, y, z], [x1, y1, z], [x1, y1, z1], [x1, y, z1]],
-            Self::NegX => [[x, y1, z], [x, y, z], [x, y, z1], [x, y1, z1]],
-            Self::PosY => [[x1, y1, z], [x, y1, z], [x, y1, z1], [x1, y1, z1]],
-            Self::NegY => [[x, y, z], [x1, y, z], [x1, y, z1], [x, y, z1]],
-            Self::PosZ => [[x, y, z1], [x1, y, z1], [x1, y1, z1], [x, y1, z1]],
-            Self::NegZ => [[x, y1, z], [x1, y1, z], [x1, y, z], [x, y, z]],
+            Self::PosX => [[p, u0, v0], [p, u1, v0], [p, u1, v1], [p, u0, v1]],
+            Self::NegX => [[p, u1, v0], [p, u0, v0], [p, u0, v1], [p, u1, v1]],
+            Self::PosY => [[u1, p, v0], [u0, p, v0], [u0, p, v1], [u1, p, v1]],
+            Self::NegY => [[u0, p, v0], [u1, p, v0], [u1, p, v1], [u0, p, v1]],
+            Self::PosZ => [[u0, v0, p], [u1, v0, p], [u1, v1, p], [u0, v1, p]],
+            Self::NegZ => [[u0, v1, p], [u1, v1, p], [u1, v0, p], [u0, v0, p]],
         }
     }
 }
