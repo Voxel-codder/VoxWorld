@@ -77,6 +77,7 @@ RUST_LOG=info,common::net=info
 RAILPACK_RUST_VERSION=nightly-2025-09-08
 RAILPACK_BUILD_APT_PACKAGES=mold
 VOXWORLD_USERDATA=/data/userdata
+VOXWORLD_WEB_MAX_SESSIONS=100
 VELOREN_GIT_VERSION=/0/0
 ```
 
@@ -94,7 +95,8 @@ native server is reachable and how many players are online. Railway uses
 `/api/health` for deploy health checks so a deployment only becomes healthy once
 the gateway can reach the native game server.
 
-The server default player cap is 100.
+The server default player cap is 100. The web gateway also defaults to 100
+active `/play` sessions so browser access follows the same one-server capacity.
 
 ## License
 

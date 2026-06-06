@@ -2,6 +2,7 @@ use std::{
     error::Error,
     net::SocketAddr,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use clap::Parser;
@@ -21,6 +22,7 @@ use tracing::{error, info, warn};
 mod play_session;
 
 type GatewayResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
+static ACTIVE_PLAY_SESSIONS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Parser)]
 #[command(name = "voxworld-web-gateway")]
@@ -41,6 +43,9 @@ struct Args {
         default_value = "web-client/web"
     )]
     static_dir: PathBuf,
+
+    #[arg(long, env = "VOXWORLD_WEB_MAX_SESSIONS", default_value_t = 100)]
+    max_sessions: usize,
 }
 
 #[tokio::main]
@@ -56,6 +61,7 @@ async fn main() -> GatewayResult<()> {
         upstream = %args.upstream,
         query_server = %args.query_server,
         static_dir = %args.static_dir.display(),
+        max_sessions = args.max_sessions,
         "web gateway listening"
     );
 
@@ -64,10 +70,18 @@ async fn main() -> GatewayResult<()> {
         let upstream = args.upstream;
         let query_server = args.query_server;
         let static_dir = args.static_dir.clone();
+        let max_sessions = args.max_sessions;
 
         tokio::spawn(async move {
-            if let Err(error) =
-                handle_connection(socket, peer, upstream, query_server, static_dir).await
+            if let Err(error) = handle_connection(
+                socket,
+                peer,
+                upstream,
+                query_server,
+                static_dir,
+                max_sessions,
+            )
+            .await
             {
                 warn!(%peer, %error, "web gateway connection ended");
             }
@@ -81,17 +95,26 @@ async fn handle_connection(
     upstream: SocketAddr,
     query_server: SocketAddr,
     static_dir: PathBuf,
+    max_sessions: usize,
 ) -> GatewayResult<()> {
     let mut peek = [0_u8; 2048];
     let read = socket.peek(&mut peek).await?;
     let request_head = String::from_utf8_lossy(&peek[..read]);
 
     if !is_websocket_request(&request_head) {
-        return serve_http(socket, peer, &static_dir, upstream, query_server).await;
+        return serve_http(
+            socket,
+            peer,
+            &static_dir,
+            upstream,
+            query_server,
+            max_sessions,
+        )
+        .await;
     }
 
     if let Some(username) = play_username(&request_head) {
-        return handle_play_connection(socket, peer, upstream, username).await;
+        return handle_play_connection(socket, peer, upstream, username, max_sessions).await;
     }
 
     info!(%peer, "browser websocket connected");
@@ -277,11 +300,27 @@ async fn handle_play_connection(
     peer: SocketAddr,
     upstream: SocketAddr,
     username: String,
+    max_sessions: usize,
 ) -> GatewayResult<()> {
     info!(%peer, %username, "browser play session connected");
 
     let websocket = accept_async(socket).await?;
     let (mut websocket_write, mut websocket_read) = websocket.split();
+    let Some(_session_slot) = try_reserve_play_session(max_sessions) else {
+        let message = json!({
+            "type": "error",
+            "message": "server full",
+            "active_sessions": active_play_sessions(),
+            "max_sessions": max_sessions,
+        });
+        websocket_write
+            .send(Message::Text(message.to_string().into()))
+            .await?;
+        websocket_write.close().await?;
+        warn!(%peer, %username, active_sessions = active_play_sessions(), max_sessions, "rejected full web play session");
+        return Ok(());
+    };
+
     let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let session = play_session::start(upstream, username, outbound_tx);
 
@@ -327,12 +366,37 @@ async fn handle_play_connection(
     Ok(())
 }
 
+struct PlaySessionSlot;
+
+impl Drop for PlaySessionSlot {
+    fn drop(&mut self) { ACTIVE_PLAY_SESSIONS.fetch_sub(1, Ordering::Relaxed); }
+}
+
+fn try_reserve_play_session(max_sessions: usize) -> Option<PlaySessionSlot> {
+    loop {
+        let active = ACTIVE_PLAY_SESSIONS.load(Ordering::Relaxed);
+        if active >= max_sessions {
+            return None;
+        }
+
+        if ACTIVE_PLAY_SESSIONS
+            .compare_exchange_weak(active, active + 1, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return Some(PlaySessionSlot);
+        }
+    }
+}
+
+fn active_play_sessions() -> usize { ACTIVE_PLAY_SESSIONS.load(Ordering::Relaxed) }
+
 async fn serve_http(
     mut socket: TcpStream,
     peer: SocketAddr,
     static_dir: &Path,
     upstream: SocketAddr,
     query_server: SocketAddr,
+    max_sessions: usize,
 ) -> GatewayResult<()> {
     let mut request = Vec::with_capacity(2048);
     let mut buffer = [0_u8; 1024];
@@ -362,7 +426,7 @@ async fn serve_http(
     };
 
     if path == "/api/status" {
-        let body = status_body(upstream, query_server).await?;
+        let body = status_body(upstream, query_server, max_sessions).await?;
         write_response_no_store(
             &mut socket,
             "200 OK",
@@ -429,12 +493,20 @@ struct HealthBody {
     body: Vec<u8>,
 }
 
-async fn status_body(upstream: SocketAddr, query_server: SocketAddr) -> GatewayResult<Vec<u8>> {
+async fn status_body(
+    upstream: SocketAddr,
+    query_server: SocketAddr,
+    max_sessions: usize,
+) -> GatewayResult<Vec<u8>> {
     let readiness = readiness_status(upstream, query_server).await;
     let body = json!({
         "service": "voxworld-web-gateway",
         "play_websocket_path": "/play",
         "raw_websocket_path": "/ws",
+        "web_sessions": {
+            "active": active_play_sessions(),
+            "max": max_sessions,
+        },
         "upstream": {
             "tcp_addr": upstream.to_string(),
             "tcp_reachable": readiness.tcp_reachable,

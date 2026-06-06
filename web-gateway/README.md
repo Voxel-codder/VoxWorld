@@ -11,6 +11,10 @@ available as a raw WebSocket-to-TCP proxy for lower-level transport experiments.
 Browsers may pass `?name=guest_name` on `/play`; the gateway sanitizes that name
 before using it for the native session.
 
+The gateway defaults to 100 active `/play` sessions, matching the server's
+default player cap. Override it with `--max-sessions` or
+`VOXWORLD_WEB_MAX_SESSIONS`.
+
 ## Run
 
 Start the native server first, then run:
@@ -38,4 +42,5 @@ The browser sends input messages such as:
 
 The gateway responds with stage, snapshot, event, and error messages. Snapshots
 currently include username, in-game state, position, online player names,
-character count, and up to 96 nearby entity positions.
+character count, and up to 96 nearby entity positions. `/api/status` also
+reports active and maximum browser play sessions.
