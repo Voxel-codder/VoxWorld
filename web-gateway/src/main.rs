@@ -530,8 +530,10 @@ async fn status_body(
     play_ping_interval: Duration,
 ) -> GatewayResult<Vec<u8>> {
     let readiness = readiness_status(upstream, query_server).await;
+    let ready = readiness_healthy(&readiness);
     let body = json!({
         "service": "voxworld-web-gateway",
+        "ready": ready,
         "play_websocket_path": "/play",
         "raw_websocket_path": "/ws",
         "web_sessions": {
@@ -554,7 +556,7 @@ async fn status_body(
 
 async fn health_body(upstream: SocketAddr, query_server: SocketAddr) -> GatewayResult<HealthBody> {
     let readiness = readiness_status(upstream, query_server).await;
-    let ok = readiness.query.ok || readiness.tcp_reachable;
+    let ok = readiness_healthy(&readiness);
     let body = json!({
         "ok": ok,
         "service": "voxworld-web-gateway",
@@ -567,6 +569,8 @@ async fn health_body(upstream: SocketAddr, query_server: SocketAddr) -> GatewayR
         body: serde_json::to_vec(&body)?,
     })
 }
+
+fn readiness_healthy(readiness: &ReadinessStatus) -> bool { readiness.query.ok }
 
 struct ReadinessStatus {
     query: QueryStatus,
@@ -704,4 +708,32 @@ async fn write_response_with_cache(
     socket.write_all(body).await?;
     socket.shutdown().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{QueryStatus, ReadinessStatus, readiness_healthy};
+
+    #[test]
+    fn health_requires_query_server_success() {
+        let tcp_only = ReadinessStatus {
+            query: QueryStatus {
+                ok: false,
+                body: json!({"ok": false}),
+            },
+            tcp_reachable: true,
+        };
+        let query_ready = ReadinessStatus {
+            query: QueryStatus {
+                ok: true,
+                body: json!({"ok": true}),
+            },
+            tcp_reachable: false,
+        };
+
+        assert!(!readiness_healthy(&tcp_only));
+        assert!(readiness_healthy(&query_ready));
+    }
 }

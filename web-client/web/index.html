@@ -126,8 +126,9 @@
           const activeSessions = Number(webSessions.active || 0);
           const maxSessions = Number(webSessions.max || 0);
           const webFull = maxSessions > 0 && activeSessions >= maxSessions;
+          const serviceReady = Boolean(data.ready ?? query?.ok);
           const sessionText = maxSessions > 0 ? ` | web ${activeSessions}/${maxSessions}` : "";
-          const reachable = Boolean((query?.ok || tcpReachable) && !webFull);
+          const reachable = Boolean(serviceReady && !webFull);
 
           if (connectButton) {
             connectButton.disabled = !reachable;

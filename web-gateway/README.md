@@ -68,5 +68,7 @@ inventory summary, the nearest pickup/NPC interaction hint, online player names,
 character count, and up to 96 nearby entity positions with available health.
 Chat messages include a browser-friendly scope, optional sender name, and
 message text.
-`/api/status` also reports active and maximum browser play sessions, plus the
-configured play-session ping interval.
+`/api/status` also reports readiness, active and maximum browser play sessions,
+plus the configured play-session ping interval. `/api/health` is only healthy
+after the native query server responds, so deploy checks wait for a playable
+server rather than only an open TCP port.

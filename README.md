@@ -94,9 +94,9 @@ native game client. `/ws` remains available as a raw WebSocket-to-TCP proxy for
 lower-level transport experiments.
 
 The gateway also exposes `/api/status` so the web client can show whether the
-native server is reachable and how many players are online. Railway uses
+native server is ready and how many players are online. Railway uses
 `/api/health` for deploy health checks so a deployment only becomes healthy once
-the gateway can reach the native game server.
+the native query server responds with live game information.
 
 The server default player cap is 100, and Railway also sets
 `VOXWORLD_MAX_PLAYERS=100` unless you override it. The web gateway defaults its
