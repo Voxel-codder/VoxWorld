@@ -9,7 +9,8 @@ auto-creates or loads a character, ticks the client, accepts browser JSON input,
 and sends browser-friendly JSON session messages back to the page. `/ws` remains
 available as a raw WebSocket-to-TCP proxy for lower-level transport experiments.
 Browsers may pass `?name=guest_name` on `/play`; the gateway sanitizes that name
-before using it for the native session.
+before using it for the native session. If multiple active browser sessions ask
+for the same name, later sessions get a short suffix such as `guest_name-2`.
 
 The gateway defaults to 100 active `/play` sessions, matching the server's
 default player cap. Override it with `--max-sessions` or

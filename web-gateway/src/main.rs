@@ -1,8 +1,12 @@
 use std::{
+    collections::HashSet,
     error::Error,
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        LazyLock, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use clap::Parser;
@@ -22,7 +26,10 @@ use tracing::{error, info, warn};
 mod play_session;
 
 type GatewayResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
+const MAX_USERNAME_LEN: usize = 24;
 static ACTIVE_PLAY_SESSIONS: AtomicUsize = AtomicUsize::new(0);
+static ACTIVE_PLAY_USERNAMES: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 #[derive(Debug, Parser)]
 #[command(name = "voxworld-web-gateway")]
@@ -283,7 +290,7 @@ fn sanitize_username(name: &str) -> Option<String> {
                 None
             }
         })
-        .take(24)
+        .take(MAX_USERNAME_LEN)
         .collect::<String>();
 
     if username.len() < 3 {
@@ -296,7 +303,7 @@ fn sanitize_username(name: &str) -> Option<String> {
         .is_some_and(|character| character.is_ascii_digit())
     {
         username.insert_str(0, "web");
-        username.truncate(24);
+        username.truncate(MAX_USERNAME_LEN);
     }
 
     Some(username)
@@ -319,7 +326,7 @@ async fn handle_play_connection(
     max_sessions: usize,
     play_ping_interval: Duration,
 ) -> GatewayResult<()> {
-    info!(%peer, %username, "browser play session connected");
+    info!(%peer, requested_username = %username, "browser play session connected");
 
     let websocket = accept_async(socket).await?;
     let (mut websocket_write, mut websocket_read) = websocket.split();
@@ -337,6 +344,9 @@ async fn handle_play_connection(
         warn!(%peer, %username, active_sessions = active_play_sessions(), max_sessions, "rejected full web play session");
         return Ok(());
     };
+    let _username_reservation = reserve_play_username(&username);
+    let username = _username_reservation.username().to_owned();
+    info!(%peer, %username, "browser play session accepted");
 
     let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let session = play_session::start(upstream, username, outbound_tx);
@@ -418,6 +428,62 @@ fn try_reserve_play_session(max_sessions: usize) -> Option<PlaySessionSlot> {
 }
 
 fn active_play_sessions() -> usize { ACTIVE_PLAY_SESSIONS.load(Ordering::Relaxed) }
+
+struct PlayUsernameReservation {
+    username: String,
+}
+
+impl PlayUsernameReservation {
+    fn username(&self) -> &str { &self.username }
+}
+
+impl Drop for PlayUsernameReservation {
+    fn drop(&mut self) {
+        ACTIVE_PLAY_USERNAMES
+            .lock()
+            .expect("play username registry poisoned")
+            .remove(&self.username);
+    }
+}
+
+fn reserve_play_username(requested: &str) -> PlayUsernameReservation {
+    let mut active_usernames = ACTIVE_PLAY_USERNAMES
+        .lock()
+        .expect("play username registry poisoned");
+
+    for attempt in 1.. {
+        let candidate = username_candidate(requested, attempt);
+        if active_usernames.insert(candidate.clone()) {
+            return PlayUsernameReservation {
+                username: candidate,
+            };
+        }
+    }
+
+    unreachable!("username candidate counter overflowed")
+}
+
+fn username_candidate(requested: &str, attempt: usize) -> String {
+    let requested = if requested.is_empty() {
+        "web"
+    } else {
+        requested
+    };
+
+    if attempt <= 1 {
+        return requested.chars().take(MAX_USERNAME_LEN).collect();
+    }
+
+    let suffix = format!("-{attempt}");
+    if suffix.len() >= MAX_USERNAME_LEN {
+        return suffix[suffix.len() - MAX_USERNAME_LEN..].to_owned();
+    }
+
+    let prefix_len = MAX_USERNAME_LEN - suffix.len();
+    let mut candidate = requested.chars().take(prefix_len).collect::<String>();
+    candidate.push_str(&suffix);
+    candidate
+}
 
 async fn serve_http(
     mut socket: TcpStream,
@@ -714,7 +780,9 @@ async fn write_response_with_cache(
 mod tests {
     use serde_json::json;
 
-    use super::{QueryStatus, ReadinessStatus, readiness_healthy};
+    use super::{
+        MAX_USERNAME_LEN, QueryStatus, ReadinessStatus, readiness_healthy, username_candidate,
+    };
 
     #[test]
     fn health_requires_query_server_success() {
@@ -735,5 +803,20 @@ mod tests {
 
         assert!(!readiness_healthy(&tcp_only));
         assert!(readiness_healthy(&query_ready));
+    }
+
+    #[test]
+    fn duplicate_username_candidates_get_short_suffixes() {
+        assert_eq!(username_candidate("alice", 1), "alice");
+        assert_eq!(username_candidate("alice", 2), "alice-2");
+        assert_eq!(username_candidate("alice", 42), "alice-42");
+    }
+
+    #[test]
+    fn suffixed_username_candidates_stay_within_limit() {
+        let candidate = username_candidate("abcdefghijklmnopqrstuvwx", 2);
+
+        assert_eq!(candidate.len(), MAX_USERNAME_LEN);
+        assert_eq!(candidate, "abcdefghijklmnopqrstuv-2");
     }
 }
