@@ -8,10 +8,25 @@
   </head>
   <body>
     <canvas id="voxworld-canvas" aria-label="Vox World Voxygen Web canvas"></canvas>
-    <div id="voxworld-status">Loading Voxygen Web...</div>
+    <aside class="boot-panel" aria-live="polite">
+      <div class="boot-title">Vox World</div>
+      <div class="boot-subtitle">Voxygen WebGPU bootstrap</div>
+      <div id="voxworld-status" class="status status-loading">Loading Voxygen Web...</div>
+      <div id="voxworld-detail" class="detail">Preparing browser runtime...</div>
+    </aside>
     <script type="module">
       import init from "./pkg/voxworld_voxygen_web.js";
-      init();
+      init().catch((error) => {
+        const status = document.getElementById("voxworld-status");
+        const detail = document.getElementById("voxworld-detail");
+        if (status) {
+          status.className = "status status-error";
+          status.textContent = "Voxygen WebGPU bootstrap failed.";
+        }
+        if (detail) {
+          detail.textContent = error instanceof Error ? error.message : String(error);
+        }
+      });
     </script>
   </body>
 </html>

@@ -4,24 +4,60 @@ use wasm_bindgen::{JsCast, prelude::*};
 use web_sys::{Document, HtmlCanvasElement, Window};
 
 const CANVAS_ID: &str = "voxworld-canvas";
+const DETAIL_ID: &str = "voxworld-detail";
 const STATUS_ID: &str = "voxworld-status";
+const PROBE_SHADER: &str = r#"
+struct VertexOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec3<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
+    var positions = array<vec2<f32>, 3>(
+        vec2<f32>(0.0, 0.72),
+        vec2<f32>(-0.72, -0.56),
+        vec2<f32>(0.72, -0.56),
+    );
+    var colors = array<vec3<f32>, 3>(
+        vec3<f32>(0.16, 0.90, 0.76),
+        vec3<f32>(0.28, 0.48, 1.00),
+        vec3<f32>(1.00, 0.72, 0.24),
+    );
+
+    var out: VertexOut;
+    out.position = vec4<f32>(positions[vertex_index], 0.0, 1.0);
+    out.color = colors[vertex_index];
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(in.color, 1.0);
+}
+"#;
 
 #[wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
-    set_status("Starting Voxygen WebGPU bootstrap...");
+    set_status("Starting Voxygen WebGPU bootstrap...", StatusState::Loading);
+    set_detail("Requesting browser WebGPU adapter...");
 
     wasm_bindgen_futures::spawn_local(async {
         match VoxygenWebBootstrap::new().await {
             Ok(bootstrap) => {
                 bootstrap.render_probe_frame();
-                set_status(
-                    "Voxygen WebGPU bootstrap is running. Next step: attach the original \
-                     scene/HUD.",
+                set_status("WebGPU render probe is running.", StatusState::Ok);
+                set_detail(
+                    "The colored triangle is drawn by the browser GPU path. Original Voxygen \
+                     scene/HUD integration is the next porting step.",
                 );
                 bootstrap.leak_for_browser_lifetime();
             },
-            Err(error) => set_status(&format!("Voxygen WebGPU bootstrap failed: {error}")),
+            Err(error) => {
+                set_status("Voxygen WebGPU bootstrap failed.", StatusState::Error);
+                set_detail(&error);
+            },
         }
     });
 }
@@ -32,6 +68,7 @@ struct VoxygenWebBootstrap {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    probe_pipeline: wgpu::RenderPipeline,
 }
 
 impl VoxygenWebBootstrap {
@@ -69,6 +106,7 @@ impl VoxygenWebBootstrap {
             .get_default_config(&adapter, width, height)
             .ok_or_else(|| "WebGPU surface has no compatible default config".to_owned())?;
         surface.configure(&device, &config);
+        let probe_pipeline = create_probe_pipeline(&device, config.format);
 
         Ok(Self {
             canvas,
@@ -76,6 +114,7 @@ impl VoxygenWebBootstrap {
             device,
             queue,
             config,
+            probe_pipeline,
         })
     }
 
@@ -93,16 +132,16 @@ impl VoxygenWebBootstrap {
             });
 
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Voxygen Web Probe Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.045,
-                            g: 0.055,
-                            b: 0.075,
+                            r: 0.055,
+                            g: 0.155,
+                            b: 0.255,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
@@ -113,6 +152,8 @@ impl VoxygenWebBootstrap {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+            render_pass.set_pipeline(&self.probe_pipeline);
+            render_pass.draw(0..3, 0..1);
         }
 
         self.queue.submit(Some(encoder.finish()));
@@ -124,6 +165,50 @@ impl VoxygenWebBootstrap {
         let _ = self.config;
         Box::leak(Box::new(self));
     }
+}
+
+fn create_probe_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Voxygen Web Probe Shader"),
+        source: wgpu::ShaderSource::Wgsl(PROBE_SHADER.into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Voxygen Web Probe Pipeline Layout"),
+        bind_group_layouts: &[],
+        push_constant_ranges: &[],
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Voxygen Web Probe Pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        multiview: None,
+        cache: None,
+    })
 }
 
 fn web_window() -> Result<Window, String> {
@@ -176,9 +261,29 @@ fn resize_canvas_to_window(
     Ok((physical_width, physical_height))
 }
 
-fn set_status(message: &str) {
+enum StatusState {
+    Loading,
+    Ok,
+    Error,
+}
+
+fn set_status(message: &str, state: StatusState) {
     if let Some(document) = web_sys::window().and_then(|window| window.document())
         && let Some(element) = document.get_element_by_id(STATUS_ID)
+    {
+        element.set_text_content(Some(message));
+        let class_name = match state {
+            StatusState::Loading => "status status-loading",
+            StatusState::Ok => "status status-ok",
+            StatusState::Error => "status status-error",
+        };
+        element.set_class_name(class_name);
+    }
+}
+
+fn set_detail(message: &str) {
+    if let Some(document) = web_sys::window().and_then(|window| window.document())
+        && let Some(element) = document.get_element_by_id(DETAIL_ID)
     {
         element.set_text_content(Some(message));
     }
