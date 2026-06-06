@@ -71,6 +71,12 @@ body {
   cursor: pointer;
 }
 
+.connection-row button:disabled {
+  background: rgb(231 247 255 / 18%);
+  color: rgb(231 247 255 / 52%);
+  cursor: not-allowed;
+}
+
 #server-summary,
 #connection-status {
   min-height: 20px;

@@ -22,10 +22,16 @@
     <script type="module">
       import init from "./pkg/voxworld_web_client.js";
 
+      let wasmReady = false;
+      let autoConnectAttempted = false;
       const serverUrl = document.getElementById("server-url");
+      const connectButton = document.getElementById("connect-button");
       if (serverUrl) {
         const scheme = window.location.protocol === "https:" ? "wss" : "ws";
         serverUrl.value = `${scheme}://${window.location.host}/ws`;
+      }
+      if (connectButton) {
+        connectButton.disabled = true;
       }
 
       async function refreshStatus() {
@@ -39,6 +45,11 @@
           const data = await response.json();
           const query = data.query_server?.result;
           const tcpReachable = Boolean(data.upstream?.tcp_reachable);
+          const reachable = Boolean(query?.ok || tcpReachable);
+
+          if (connectButton) {
+            connectButton.disabled = !reachable;
+          }
 
           if (query?.ok) {
             summary.textContent = `${query.players}/${query.player_cap} online`;
@@ -47,9 +58,17 @@
           } else {
             summary.textContent = "Server offline";
           }
+
+          if (reachable && wasmReady && !autoConnectAttempted) {
+            autoConnectAttempted = true;
+            connectButton?.click();
+          }
         } catch (error) {
           console.error(error);
           summary.textContent = "Status unavailable";
+          if (connectButton) {
+            connectButton.disabled = true;
+          }
         }
       }
 
@@ -57,7 +76,8 @@
       window.setInterval(refreshStatus, 5000);
 
       init().then(() => {
-        document.getElementById("connect-button")?.click();
+        wasmReady = true;
+        refreshStatus();
       }).catch((error) => {
         console.error(error);
         const status = document.getElementById("connection-status");

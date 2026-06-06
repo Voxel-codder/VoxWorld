@@ -4,7 +4,7 @@ buildCommand = "bash scripts/railway-build.sh"
 
 [deploy]
 startCommand = "bash scripts/railway-start.sh"
-healthcheckPath = "/"
+healthcheckPath = "/api/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10

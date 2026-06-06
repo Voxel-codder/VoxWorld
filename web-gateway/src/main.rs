@@ -197,6 +197,24 @@ async fn serve_http(
         return Ok(());
     }
 
+    if path == "/api/health" {
+        let health = health_body(upstream, query_server).await?;
+        let status = if health.ok {
+            "200 OK"
+        } else {
+            "503 Service Unavailable"
+        };
+        write_response_no_store(
+            &mut socket,
+            status,
+            "application/json; charset=utf-8",
+            &health.body,
+        )
+        .await?;
+        info!(%peer, ok = health.ok, "served health endpoint");
+        return Ok(());
+    }
+
     let Some(file_path) = static_file_path(static_dir, path) else {
         write_response(
             &mut socket,
@@ -229,9 +247,53 @@ async fn serve_http(
     Ok(())
 }
 
+struct HealthBody {
+    ok: bool,
+    body: Vec<u8>,
+}
+
 async fn status_body(upstream: SocketAddr, query_server: SocketAddr) -> GatewayResult<Vec<u8>> {
-    let query_result = query_server_status(query_server).await;
-    let tcp_reachable = if query_result.ok {
+    let readiness = readiness_status(upstream, query_server).await;
+    let body = json!({
+        "service": "voxworld-web-gateway",
+        "websocket_path": "/ws",
+        "upstream": {
+            "tcp_addr": upstream.to_string(),
+            "tcp_reachable": readiness.tcp_reachable,
+        },
+        "query_server": {
+            "addr": query_server.to_string(),
+            "result": readiness.query.body,
+        },
+    });
+
+    Ok(serde_json::to_vec(&body)?)
+}
+
+async fn health_body(upstream: SocketAddr, query_server: SocketAddr) -> GatewayResult<HealthBody> {
+    let readiness = readiness_status(upstream, query_server).await;
+    let ok = readiness.query.ok || readiness.tcp_reachable;
+    let body = json!({
+        "ok": ok,
+        "service": "voxworld-web-gateway",
+        "upstream_tcp_reachable": readiness.tcp_reachable,
+        "query_server_ok": readiness.query.ok,
+    });
+
+    Ok(HealthBody {
+        ok,
+        body: serde_json::to_vec(&body)?,
+    })
+}
+
+struct ReadinessStatus {
+    query: QueryStatus,
+    tcp_reachable: bool,
+}
+
+async fn readiness_status(upstream: SocketAddr, query_server: SocketAddr) -> ReadinessStatus {
+    let query = query_server_status(query_server).await;
+    let tcp_reachable = if query.ok {
         true
     } else {
         matches!(
@@ -239,20 +301,11 @@ async fn status_body(upstream: SocketAddr, query_server: SocketAddr) -> GatewayR
             Ok(Ok(_))
         )
     };
-    let body = json!({
-        "service": "voxworld-web-gateway",
-        "websocket_path": "/ws",
-        "upstream": {
-            "tcp_addr": upstream.to_string(),
-            "tcp_reachable": tcp_reachable,
-        },
-        "query_server": {
-            "addr": query_server.to_string(),
-            "result": query_result.body,
-        },
-    });
 
-    Ok(serde_json::to_vec(&body)?)
+    ReadinessStatus {
+        query,
+        tcp_reachable,
+    }
 }
 
 struct QueryStatus {

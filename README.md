@@ -88,7 +88,9 @@ connections to the web gateway. The gateway forwards browser traffic to the
 native game server on `127.0.0.1:14004`.
 
 The gateway also exposes `/api/status` so the web client can show whether the
-native server is reachable and how many players are online.
+native server is reachable and how many players are online. Railway uses
+`/api/health` for deploy health checks so a deployment only becomes healthy once
+the gateway can reach the native game server.
 
 The server default player cap is 100.
 
