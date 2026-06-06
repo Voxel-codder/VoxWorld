@@ -12,6 +12,8 @@ const CANVAS_ID: &str = "voxworld-canvas";
 const DETAIL_ID: &str = "voxworld-detail";
 const STATUS_ID: &str = "voxworld-status";
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
+const PLAYER_SPEED_BLOCKS_PER_SECOND: f32 = 14.0;
+const MAX_FRAME_DELTA_SECONDS: f32 = 0.05;
 const TERRAIN_SHADER: &str = r#"
 struct Camera {
     view_proj: mat4x4<f32>,
@@ -58,8 +60,7 @@ pub fn start() {
         match VoxygenWebClient::new().await {
             Ok(client) => {
                 let client = Rc::new(RefCell::new(client));
-                if let Err(error) = VoxygenWebClient::install_keyboard_controls(Rc::clone(&client))
-                {
+                if let Err(error) = VoxygenWebClient::install_input_controls(Rc::clone(&client)) {
                     set_status("Original WorldSim terrain is rendering.", StatusState::Ok);
                     set_detail(&format!(
                         "{} Keyboard controls failed to attach: {error}",
@@ -67,6 +68,13 @@ pub fn start() {
                     ));
                 } else {
                     set_detail(&client.borrow().scene_summary());
+                }
+                if let Err(error) = VoxygenWebClient::install_animation_loop(Rc::clone(&client)) {
+                    set_status("Original WorldSim terrain is rendering.", StatusState::Ok);
+                    set_detail(&format!(
+                        "{} Animation loop failed to start: {error}",
+                        client.borrow().scene_summary()
+                    ));
                 }
                 client.borrow().render_frame();
                 set_status("Original WorldSim terrain is rendering.", StatusState::Ok);
@@ -91,17 +99,84 @@ struct VoxygenWebClient {
     terrain_vertex_buffer: wgpu::Buffer,
     terrain_index_buffer: wgpu::Buffer,
     terrain_index_count: u32,
-    _camera_buffer: wgpu::Buffer,
+    camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     world_preview: OriginalWorldPreview,
     world_mesh: OriginalWorldMesh,
-    keyboard_listener: Option<Closure<dyn FnMut(KeyboardEvent)>>,
+    player: PlayerState,
+    keydown_listener: Option<Closure<dyn FnMut(KeyboardEvent)>>,
+    keyup_listener: Option<Closure<dyn FnMut(KeyboardEvent)>>,
+}
+
+struct PlayerState {
+    wpos: Vec2<f32>,
+    center_chunk_pos: Vec2<i32>,
+    aspect: f32,
+    input: InputState,
+    last_frame_ms: Option<f64>,
+}
+
+impl PlayerState {
+    fn new(wpos: Vec2<f32>, center_chunk_pos: Vec2<i32>, aspect: f32) -> Self {
+        Self {
+            wpos,
+            center_chunk_pos,
+            aspect,
+            input: InputState::default(),
+            last_frame_ms: None,
+        }
+    }
+
+    fn frame_delta(&mut self, timestamp_ms: f64) -> f32 {
+        let dt = self
+            .last_frame_ms
+            .map(|last_frame_ms| ((timestamp_ms - last_frame_ms) / 1000.0) as f32)
+            .unwrap_or(0.0)
+            .clamp(0.0, MAX_FRAME_DELTA_SECONDS);
+        self.last_frame_ms = Some(timestamp_ms);
+        dt
+    }
+}
+
+#[derive(Default)]
+struct InputState {
+    forward: bool,
+    backward: bool,
+    left: bool,
+    right: bool,
+}
+
+impl InputState {
+    fn set_key_state(&mut self, key: &str, pressed: bool) -> bool {
+        match key {
+            "ArrowUp" | "w" | "W" => self.forward = pressed,
+            "ArrowDown" | "s" | "S" => self.backward = pressed,
+            "ArrowLeft" | "a" | "A" => self.left = pressed,
+            "ArrowRight" | "d" | "D" => self.right = pressed,
+            _ => return false,
+        }
+        true
+    }
+
+    fn direction(&self) -> Option<Vec2<f32>> {
+        let x = i32::from(self.right) - i32::from(self.left);
+        let y = i32::from(self.backward) - i32::from(self.forward);
+        if x == 0 && y == 0 {
+            return None;
+        }
+
+        let direction = Vec2::new(x as f32, y as f32);
+        let magnitude = (direction.x * direction.x + direction.y * direction.y).sqrt();
+        Some(direction / magnitude.max(f32::EPSILON))
+    }
 }
 
 impl VoxygenWebClient {
     async fn new() -> Result<Self, String> {
         let world_preview = world_preview::build_original_world_preview()?;
-        let world_mesh = world_preview.generate_mesh(world_preview.initial_center_chunk_pos())?;
+        let center_chunk_pos = world_preview.initial_center_chunk_pos();
+        let player_wpos = world_preview.initial_player_wpos();
+        let world_mesh = world_preview.generate_mesh(center_chunk_pos)?;
         set_detail(
             "Original WorldSim terrain patch generated. Requesting browser WebGPU adapter...",
         );
@@ -141,8 +216,9 @@ impl VoxygenWebClient {
         surface.configure(&device, &config);
 
         let depth_view = create_depth_view(&device, &config);
-        let camera_matrix =
-            camera_view_projection(width as f32 / height.max(1) as f32, &world_mesh);
+        let aspect = width as f32 / height.max(1) as f32;
+        let player_render_pos = world_preview.player_render_position(player_wpos, center_chunk_pos);
+        let camera_matrix = camera_view_projection(aspect, &world_mesh, player_render_pos);
         let camera_buffer = create_buffer_with_data(
             &device,
             &matrix_bytes(&camera_matrix),
@@ -202,31 +278,73 @@ impl VoxygenWebClient {
             terrain_vertex_buffer,
             terrain_index_buffer,
             terrain_index_count,
-            _camera_buffer: camera_buffer,
+            camera_buffer,
             camera_bind_group,
             world_preview,
             world_mesh,
-            keyboard_listener: None,
+            player: PlayerState::new(player_wpos, center_chunk_pos, aspect),
+            keydown_listener: None,
+            keyup_listener: None,
         })
     }
 
-    fn install_keyboard_controls(client: Rc<RefCell<Self>>) -> Result<(), String> {
+    fn install_input_controls(client: Rc<RefCell<Self>>) -> Result<(), String> {
         let window = web_window()?;
-        let listener_client = Rc::clone(&client);
-        let listener = Closure::wrap(Box::new(move |event: KeyboardEvent| {
-            let Some(delta) = movement_delta(&event.key()) else {
-                return;
-            };
-            event.prevent_default();
-            if let Err(error) = listener_client.borrow_mut().move_preview_center(delta) {
-                set_status("Voxygen web scene failed.", StatusState::Error);
-                set_detail(&error);
+
+        let keydown_client = Rc::clone(&client);
+        let keydown_listener = Closure::wrap(Box::new(move |event: KeyboardEvent| {
+            if keydown_client
+                .borrow_mut()
+                .set_key_state(&event.key(), true)
+            {
+                event.prevent_default();
             }
         }) as Box<dyn FnMut(KeyboardEvent)>);
         window
-            .add_event_listener_with_callback("keydown", listener.as_ref().unchecked_ref())
-            .map_err(|_| "failed to attach keyboard controls".to_owned())?;
-        client.borrow_mut().keyboard_listener = Some(listener);
+            .add_event_listener_with_callback("keydown", keydown_listener.as_ref().unchecked_ref())
+            .map_err(|_| "failed to attach keydown controls".to_owned())?;
+
+        let keyup_client = Rc::clone(&client);
+        let keyup_listener = Closure::wrap(Box::new(move |event: KeyboardEvent| {
+            if keyup_client.borrow_mut().set_key_state(&event.key(), false) {
+                event.prevent_default();
+            }
+        }) as Box<dyn FnMut(KeyboardEvent)>);
+        window
+            .add_event_listener_with_callback("keyup", keyup_listener.as_ref().unchecked_ref())
+            .map_err(|_| "failed to attach keyup controls".to_owned())?;
+
+        let mut client = client.borrow_mut();
+        client.keydown_listener = Some(keydown_listener);
+        client.keyup_listener = Some(keyup_listener);
+        Ok(())
+    }
+
+    fn install_animation_loop(client: Rc<RefCell<Self>>) -> Result<(), String> {
+        let window = web_window()?;
+        let frame_callback: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>> =
+            Rc::new(RefCell::new(None));
+        let frame_callback_handle = Rc::clone(&frame_callback);
+        let frame_client = Rc::clone(&client);
+
+        *frame_callback.borrow_mut() = Some(Closure::wrap(Box::new(move |timestamp_ms: f64| {
+            if let Err(error) = frame_client.borrow_mut().tick(timestamp_ms) {
+                set_status("Voxygen web scene failed.", StatusState::Error);
+                set_detail(&error);
+                return;
+            }
+            if let Some(window) = web_sys::window()
+                && let Some(callback) = frame_callback_handle.borrow().as_ref()
+            {
+                let _ = window.request_animation_frame(callback.as_ref().unchecked_ref());
+            }
+        }) as Box<dyn FnMut(f64)>));
+
+        if let Some(callback) = frame_callback.borrow().as_ref() {
+            window
+                .request_animation_frame(callback.as_ref().unchecked_ref())
+                .map_err(|_| "failed to request animation frame".to_owned())?;
+        }
         Ok(())
     }
 
@@ -285,28 +403,6 @@ impl VoxygenWebClient {
         frame.present();
     }
 
-    fn move_preview_center(&mut self, delta: Vec2<i32>) -> Result<(), String> {
-        let current = Vec2::new(
-            self.world_mesh.center_chunk_pos.0,
-            self.world_mesh.center_chunk_pos.1,
-        );
-        let next = self.world_preview.clamp_center_chunk_pos(current + delta);
-        if next == current {
-            return Ok(());
-        }
-
-        set_status(
-            "Generating original WorldSim terrain chunks...",
-            StatusState::Loading,
-        );
-        let world_mesh = self.world_preview.generate_mesh(next)?;
-        self.upload_world_mesh(world_mesh)?;
-        self.render_frame();
-        set_status("Original WorldSim terrain is rendering.", StatusState::Ok);
-        set_detail(&self.scene_summary());
-        Ok(())
-    }
-
     fn upload_world_mesh(&mut self, world_mesh: OriginalWorldMesh) -> Result<(), String> {
         let terrain_vertex_buffer = create_buffer_with_data(
             &self.device,
@@ -333,13 +429,58 @@ impl VoxygenWebClient {
         Ok(())
     }
 
+    fn set_key_state(&mut self, key: &str, pressed: bool) -> bool {
+        self.player.input.set_key_state(key, pressed)
+    }
+
+    fn tick(&mut self, timestamp_ms: f64) -> Result<(), String> {
+        let dt = self.player.frame_delta(timestamp_ms);
+        let Some(direction) = self.player.input.direction() else {
+            return Ok(());
+        };
+        if dt <= 0.0 {
+            return Ok(());
+        }
+
+        self.player.wpos += direction * (PLAYER_SPEED_BLOCKS_PER_SECOND * dt);
+        self.player.wpos = self.world_preview.clamp_player_wpos(self.player.wpos);
+
+        let next_center = self.world_preview.center_chunk_for_wpos(self.player.wpos);
+        if next_center != self.player.center_chunk_pos {
+            set_status(
+                "Generating original WorldSim terrain chunks...",
+                StatusState::Loading,
+            );
+            let world_mesh = self.world_preview.generate_mesh(next_center)?;
+            self.upload_world_mesh(world_mesh)?;
+            self.player.center_chunk_pos = next_center;
+        }
+
+        self.update_camera();
+        self.render_frame();
+        set_status("Original WorldSim terrain is rendering.", StatusState::Ok);
+        set_detail(&self.scene_summary());
+        Ok(())
+    }
+
+    fn update_camera(&self) {
+        let player_render_pos = self
+            .world_preview
+            .player_render_position(self.player.wpos, self.player.center_chunk_pos);
+        let camera_matrix =
+            camera_view_projection(self.player.aspect, &self.world_mesh, player_render_pos);
+        self.queue
+            .write_buffer(&self.camera_buffer, 0, &matrix_bytes(&camera_matrix));
+    }
+
     fn scene_summary(&self) -> String {
         let (chunks_x, chunks_y) = self.world_mesh.chunk_dimensions;
         let (patch_x, patch_y) = self.world_mesh.chunk_patch;
         format!(
             "Seed {} generated {} original TerrainChunks in a {}x{} patch around {:?} inside a \
-             {}x{} WorldSim. WebGPU block faces: {}. Filled blocks: {}. Liquid blocks: {}. Entity \
-             spawns: {}. World features loaded: {}. Wildlife spawn manifests: {}.",
+             {}x{} WorldSim. Player block position: ({:.1}, {:.1}). WebGPU block faces: {}. \
+             Filled blocks: {}. Liquid blocks: {}. Entity spawns: {}. World features loaded: {}. \
+             Wildlife spawn manifests: {}.",
             self.world_mesh.seed,
             self.world_mesh.generated_chunks,
             patch_x,
@@ -347,6 +488,8 @@ impl VoxygenWebClient {
             self.world_mesh.center_chunk_pos,
             chunks_x,
             chunks_y,
+            self.player.wpos.x,
+            self.player.wpos.y,
             self.world_mesh.terrain_faces,
             self.world_mesh.filled_blocks,
             self.world_mesh.liquid_blocks,
@@ -465,29 +608,27 @@ fn create_buffer_with_data(
     buffer
 }
 
-fn camera_view_projection(aspect: f32, world_mesh: &OriginalWorldMesh) -> [f32; 16] {
+fn camera_view_projection(
+    aspect: f32,
+    world_mesh: &OriginalWorldMesh,
+    player_render_pos: [f32; 3],
+) -> [f32; 16] {
     let patch_width = world_mesh.chunk_patch.0.max(world_mesh.chunk_patch.1) as f32;
     let eye_distance = (patch_width * 28.0).max(42.0);
-    let eye = [
-        eye_distance * 0.72,
-        eye_distance * 0.46,
-        eye_distance * 0.86,
+    let target = [
+        player_render_pos[0],
+        player_render_pos[1] + 4.0,
+        player_render_pos[2],
     ];
-    let target = [0.0, 4.0, 0.0];
+    let eye = [
+        target[0] + eye_distance * 0.72,
+        target[1] + eye_distance * 0.46,
+        target[2] + eye_distance * 0.86,
+    ];
     let up = [0.0, 1.0, 0.0];
     let view = look_at_rh(eye, target, up);
     let projection = perspective_rh(50.0_f32.to_radians(), aspect.max(0.1), 0.1, 360.0);
     mul_mat4(projection, view)
-}
-
-fn movement_delta(key: &str) -> Option<Vec2<i32>> {
-    match key {
-        "ArrowUp" | "w" | "W" => Some(Vec2::new(0, -1)),
-        "ArrowDown" | "s" | "S" => Some(Vec2::new(0, 1)),
-        "ArrowLeft" | "a" | "A" => Some(Vec2::new(-1, 0)),
-        "ArrowRight" | "d" | "D" => Some(Vec2::new(1, 0)),
-        _ => None,
-    }
 }
 
 fn look_at_rh(eye: [f32; 3], target: [f32; 3], up: [f32; 3]) -> [f32; 16] {

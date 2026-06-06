@@ -14,6 +14,7 @@ use veloren_world::{
 };
 
 pub const FLOATS_PER_VERTEX: usize = 6;
+pub const TERRAIN_HORIZONTAL_SCALE: f32 = 0.64;
 const SEED: u32 = 7;
 const MAP_LG: u32 = 5;
 const CHUNK_RADIUS: i32 = 1;
@@ -93,6 +94,18 @@ impl OriginalWorldPreview {
         Vec2::new(self.dimensions.x as i32 / 2, self.dimensions.y as i32 / 2)
     }
 
+    pub fn initial_player_wpos(&self) -> Vec2<f32> {
+        chunk_center_wpos(self.initial_center_chunk_pos())
+    }
+
+    pub fn center_chunk_for_wpos(&self, wpos: Vec2<f32>) -> Vec2<i32> {
+        let rect_size = TerrainChunkSize::RECT_SIZE.as_::<f32>();
+        self.clamp_center_chunk_pos(Vec2::new(
+            (wpos.x / rect_size.x).floor() as i32,
+            (wpos.y / rect_size.y).floor() as i32,
+        ))
+    }
+
     pub fn clamp_center_chunk_pos(&self, chunk_pos: Vec2<i32>) -> Vec2<i32> {
         let max_world_x = self.dimensions.x.saturating_sub(1) as i32;
         let max_world_y = self.dimensions.y.saturating_sub(1) as i32;
@@ -105,6 +118,26 @@ impl OriginalWorldPreview {
             chunk_pos.x.clamp(min_x, max_x),
             chunk_pos.y.clamp(min_y, max_y),
         )
+    }
+
+    pub fn clamp_player_wpos(&self, wpos: Vec2<f32>) -> Vec2<f32> {
+        let rect_size = TerrainChunkSize::RECT_SIZE.as_::<f32>();
+        let max = self.dimensions.as_::<f32>() * rect_size - Vec2::broadcast(1.0);
+        Vec2::new(wpos.x.clamp(0.0, max.x), wpos.y.clamp(0.0, max.y))
+    }
+
+    pub fn player_render_position(
+        &self,
+        player_wpos: Vec2<f32>,
+        center_chunk_pos: Vec2<i32>,
+    ) -> [f32; 3] {
+        let center = chunk_center_wpos(center_chunk_pos);
+        let delta = player_wpos - center;
+        [
+            delta.x * TERRAIN_HORIZONTAL_SCALE,
+            0.0,
+            delta.y * TERRAIN_HORIZONTAL_SCALE,
+        ]
     }
 
     pub fn generate_mesh(&self, center_chunk_pos: Vec2<i32>) -> Result<OriginalWorldMesh, String> {
@@ -263,6 +296,10 @@ fn relative_chunk_origin(chunk_pos: Vec2<i32>, center_chunk_pos: Vec2<i32>) -> V
     Vec2::new(chunk_delta.x * rect_size.x, chunk_delta.y * rect_size.y)
 }
 
+fn chunk_center_wpos(chunk_pos: Vec2<i32>) -> Vec2<f32> {
+    TerrainChunkSize::center_wpos(chunk_pos).as_::<f32>()
+}
+
 fn face_visible(chunk: &TerrainChunk, pos: Vec3<i32>, block: &Block, face: Face) -> bool {
     match chunk.get(pos + face.normal()) {
         Ok(neighbor) if block.is_liquid() => !neighbor.is_liquid(),
@@ -323,9 +360,9 @@ impl BlockMeshBuilder {
     fn render_point(&self, point: [f32; 3], chunk_origin: Vec2<i32>) -> [f32; 3] {
         let chunk_center = TerrainChunkSize::RECT_SIZE.x as f32 * 0.5;
         [
-            (point[0] + chunk_origin.x as f32 - chunk_center) * 0.64,
+            (point[0] + chunk_origin.x as f32 - chunk_center) * TERRAIN_HORIZONTAL_SCALE,
             (point[2] - self.vertical_origin) * 0.28,
-            (point[1] + chunk_origin.y as f32 - chunk_center) * 0.64,
+            (point[1] + chunk_origin.y as f32 - chunk_center) * TERRAIN_HORIZONTAL_SCALE,
         ]
     }
 }
