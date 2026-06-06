@@ -13,7 +13,9 @@ before using it for the native session.
 
 The gateway defaults to 100 active `/play` sessions, matching the server's
 default player cap. Override it with `--max-sessions` or
-`VOXWORLD_WEB_MAX_SESSIONS`.
+`VOXWORLD_WEB_MAX_SESSIONS`. Browser play sessions receive WebSocket pings every
+30 seconds by default; override that with `--play-ping-interval-secs` or
+`VOXWORLD_WEB_PING_INTERVAL_SECS`.
 
 ## Run
 
@@ -57,4 +59,5 @@ Snapshots currently include username, in-game state, position, health, energy,
 online player names, character count, and up to 96 nearby entity positions with
 available health. Chat messages include a browser-friendly scope, optional
 sender name, and message text.
-`/api/status` also reports active and maximum browser play sessions.
+`/api/status` also reports active and maximum browser play sessions, plus the
+configured play-session ping interval.

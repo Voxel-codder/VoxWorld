@@ -14,7 +14,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     select,
-    time::{Duration, timeout},
+    time::{Duration, interval, timeout},
 };
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
@@ -46,6 +46,9 @@ struct Args {
 
     #[arg(long, env = "VOXWORLD_WEB_MAX_SESSIONS", default_value_t = 100)]
     max_sessions: usize,
+
+    #[arg(long, env = "VOXWORLD_WEB_PING_INTERVAL_SECS", default_value_t = 30)]
+    play_ping_interval_secs: u64,
 }
 
 #[tokio::main]
@@ -62,6 +65,7 @@ async fn main() -> GatewayResult<()> {
         query_server = %args.query_server,
         static_dir = %args.static_dir.display(),
         max_sessions = args.max_sessions,
+        play_ping_interval_secs = args.play_ping_interval_secs,
         "web gateway listening"
     );
 
@@ -71,6 +75,7 @@ async fn main() -> GatewayResult<()> {
         let query_server = args.query_server;
         let static_dir = args.static_dir.clone();
         let max_sessions = args.max_sessions;
+        let play_ping_interval = Duration::from_secs(args.play_ping_interval_secs.max(1));
 
         tokio::spawn(async move {
             if let Err(error) = handle_connection(
@@ -80,6 +85,7 @@ async fn main() -> GatewayResult<()> {
                 query_server,
                 static_dir,
                 max_sessions,
+                play_ping_interval,
             )
             .await
             {
@@ -96,6 +102,7 @@ async fn handle_connection(
     query_server: SocketAddr,
     static_dir: PathBuf,
     max_sessions: usize,
+    play_ping_interval: Duration,
 ) -> GatewayResult<()> {
     let mut peek = [0_u8; 2048];
     let read = socket.peek(&mut peek).await?;
@@ -109,12 +116,21 @@ async fn handle_connection(
             upstream,
             query_server,
             max_sessions,
+            play_ping_interval,
         )
         .await;
     }
 
     if let Some(username) = play_username(&request_head) {
-        return handle_play_connection(socket, peer, upstream, username, max_sessions).await;
+        return handle_play_connection(
+            socket,
+            peer,
+            upstream,
+            username,
+            max_sessions,
+            play_ping_interval,
+        )
+        .await;
     }
 
     info!(%peer, "browser websocket connected");
@@ -301,6 +317,7 @@ async fn handle_play_connection(
     upstream: SocketAddr,
     username: String,
     max_sessions: usize,
+    play_ping_interval: Duration,
 ) -> GatewayResult<()> {
     info!(%peer, %username, "browser play session connected");
 
@@ -346,8 +363,20 @@ async fn handle_play_connection(
     };
 
     let session_to_browser = async {
-        while let Some(message) = outbound_rx.recv().await {
-            websocket_write.send(Message::Text(message.into())).await?;
+        let mut heartbeat = interval(play_ping_interval);
+
+        loop {
+            select! {
+                message = outbound_rx.recv() => {
+                    let Some(message) = message else {
+                        break;
+                    };
+                    websocket_write.send(Message::Text(message.into())).await?;
+                },
+                _ = heartbeat.tick() => {
+                    websocket_write.send(Message::Ping(Vec::new().into())).await?;
+                },
+            }
         }
 
         if let Err(error) = websocket_write.close().await {
@@ -397,6 +426,7 @@ async fn serve_http(
     upstream: SocketAddr,
     query_server: SocketAddr,
     max_sessions: usize,
+    play_ping_interval: Duration,
 ) -> GatewayResult<()> {
     let mut request = Vec::with_capacity(2048);
     let mut buffer = [0_u8; 1024];
@@ -426,7 +456,7 @@ async fn serve_http(
     };
 
     if path == "/api/status" {
-        let body = status_body(upstream, query_server, max_sessions).await?;
+        let body = status_body(upstream, query_server, max_sessions, play_ping_interval).await?;
         write_response_no_store(
             &mut socket,
             "200 OK",
@@ -497,6 +527,7 @@ async fn status_body(
     upstream: SocketAddr,
     query_server: SocketAddr,
     max_sessions: usize,
+    play_ping_interval: Duration,
 ) -> GatewayResult<Vec<u8>> {
     let readiness = readiness_status(upstream, query_server).await;
     let body = json!({
@@ -506,6 +537,7 @@ async fn status_body(
         "web_sessions": {
             "active": active_play_sessions(),
             "max": max_sessions,
+            "ping_interval_secs": play_ping_interval.as_secs(),
         },
         "upstream": {
             "tcp_addr": upstream.to_string(),

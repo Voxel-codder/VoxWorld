@@ -79,6 +79,7 @@ RAILPACK_BUILD_APT_PACKAGES=mold
 VOXWORLD_USERDATA=/data/userdata
 VOXWORLD_MAX_PLAYERS=100
 VOXWORLD_WEB_MAX_SESSIONS=100
+VOXWORLD_WEB_PING_INTERVAL_SECS=30
 VOXWORLD_SERVER_STARTUP_TIMEOUT=90
 VELOREN_GIT_VERSION=/0/0
 ```
@@ -100,7 +101,9 @@ the gateway can reach the native game server.
 The server default player cap is 100, and Railway also sets
 `VOXWORLD_MAX_PLAYERS=100` unless you override it. The web gateway defaults its
 active `/play` session limit to the same value, or to
-`VOXWORLD_WEB_MAX_SESSIONS` when that variable is set.
+`VOXWORLD_WEB_MAX_SESSIONS` when that variable is set. Browser play sessions
+also receive periodic WebSocket pings, defaulting to 30 seconds, so dead browser
+connections release their session slots.
 
 ## License
 
