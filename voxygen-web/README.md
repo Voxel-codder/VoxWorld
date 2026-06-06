@@ -52,6 +52,9 @@ Current milestone:
   traversal through every slope;
 - map keyboard movement through the current third-person camera basis so WASD
   movement follows the rendered play view instead of fixed world axes;
+- rotate the browser-side third-person camera with mouse drag and reuse that
+  camera basis for movement and chunk prefetch direction, moving the preview
+  closer to original Voxygen play controls instead of a fixed-angle flyover;
 - frame the WebGPU scene with a player-following third-person camera instead
   of the earlier far-away terrain-preview view;
 - convert original `ChunkSupplement.entity_spawns` into visible 3D markers and

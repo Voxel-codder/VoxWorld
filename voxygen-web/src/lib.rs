@@ -22,7 +22,7 @@ use common::{
 };
 use vek::Vec2;
 use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
-use web_sys::{Document, Element, HtmlCanvasElement, KeyboardEvent, Window};
+use web_sys::{Document, Element, HtmlCanvasElement, KeyboardEvent, MouseEvent, Window};
 use world_preview::{
     FLOATS_PER_VERTEX, OriginalEntityMarker, OriginalEntityMarkerShape, OriginalTerrainChunkMesh,
     OriginalWorldMesh, OriginalWorldPreview, TradePanelPreview,
@@ -46,7 +46,11 @@ const MAX_PLAYER_STEP_UP_BLOCKS: f32 = 2.25;
 const MAX_PLAYER_DROP_BLOCKS: f32 = 7.0;
 const THIRD_PERSON_CAMERA_DISTANCE: f32 = 34.0;
 const CAMERA_FORWARD_WORLD: [f32; 2] = [-0.58, -0.72];
-const CAMERA_RIGHT_WORLD: [f32; 2] = [0.72, -0.58];
+const INITIAL_CAMERA_PITCH_RADIANS: f32 = 0.44;
+const MIN_CAMERA_PITCH_RADIANS: f32 = 0.18;
+const MAX_CAMERA_PITCH_RADIANS: f32 = 1.0;
+const CAMERA_MOUSE_YAW_SENSITIVITY: f32 = 0.006;
+const CAMERA_MOUSE_PITCH_SENSITIVITY: f32 = 0.004;
 const MIN_PLAYER_FACING_MOVE_BLOCKS: f32 = 0.01;
 const TERRAIN_SHADER: &str = r#"
 struct Camera {
@@ -146,6 +150,9 @@ struct VoxygenWebClient {
     active_trade: Option<PreviewTradeSession>,
     keydown_listener: Option<Closure<dyn FnMut(KeyboardEvent)>>,
     keyup_listener: Option<Closure<dyn FnMut(KeyboardEvent)>>,
+    mousedown_listener: Option<Closure<dyn FnMut(MouseEvent)>>,
+    mouseup_listener: Option<Closure<dyn FnMut(MouseEvent)>>,
+    mousemove_listener: Option<Closure<dyn FnMut(MouseEvent)>>,
 }
 
 struct TerrainChunkGpuMesh {
@@ -161,6 +168,9 @@ struct PlayerState {
     facing: Vec2<f32>,
     aspect: f32,
     input: InputState,
+    camera_yaw_radians: f32,
+    camera_pitch_radians: f32,
+    camera_dragging: bool,
     last_frame_ms: Option<f64>,
     blocked_move_count: u32,
     last_interaction: Option<String>,
@@ -172,9 +182,12 @@ impl PlayerState {
             wpos,
             terrain_z,
             center_chunk_pos,
-            facing: camera_forward_world(),
+            facing: initial_camera_forward_world(),
             aspect,
             input: InputState::default(),
+            camera_yaw_radians: initial_camera_yaw_radians(),
+            camera_pitch_radians: INITIAL_CAMERA_PITCH_RADIANS,
+            camera_dragging: false,
             last_frame_ms: None,
             blocked_move_count: 0,
             last_interaction: None,
@@ -202,6 +215,22 @@ impl PlayerState {
     }
 
     fn facing_yaw_radians(&self) -> f32 { self.facing.y.atan2(self.facing.x) }
+
+    fn camera_forward(&self) -> Vec2<f32> { camera_forward_from_yaw(self.camera_yaw_radians) }
+
+    fn camera_right(&self) -> Vec2<f32> { camera_right_from_yaw(self.camera_yaw_radians) }
+
+    fn movement_direction(&self) -> Option<Vec2<f32>> {
+        self.input
+            .direction(self.camera_forward(), self.camera_right())
+    }
+
+    fn rotate_camera(&mut self, delta_x: f32, delta_y: f32) {
+        self.camera_yaw_radians += delta_x * CAMERA_MOUSE_YAW_SENSITIVITY;
+        self.camera_pitch_radians = (self.camera_pitch_radians
+            + delta_y * CAMERA_MOUSE_PITCH_SENSITIVITY)
+            .clamp(MIN_CAMERA_PITCH_RADIANS, MAX_CAMERA_PITCH_RADIANS);
+    }
 }
 
 #[derive(Default)]
@@ -274,7 +303,7 @@ impl InputState {
         input
     }
 
-    fn direction(&self) -> Option<Vec2<f32>> {
+    fn direction(&self, camera_forward: Vec2<f32>, camera_right: Vec2<f32>) -> Option<Vec2<f32>> {
         let forward_axis = i32::from(self.forward) - i32::from(self.backward);
         let right_axis = i32::from(self.right) - i32::from(self.left);
         if forward_axis == 0 && right_axis == 0 {
@@ -282,7 +311,7 @@ impl InputState {
         }
 
         Some(normalize2(
-            camera_forward_world() * forward_axis as f32 + camera_right_world() * right_axis as f32,
+            camera_forward * forward_axis as f32 + camera_right * right_axis as f32,
         ))
     }
 }
@@ -528,12 +557,21 @@ fn trade_offers_are_valid<'a>(
 
 fn populated_inventory_slots(inventory: &Inventory) -> usize { inventory.slots().flatten().count() }
 
-fn camera_forward_world() -> Vec2<f32> {
+fn initial_camera_forward_world() -> Vec2<f32> {
     normalize2(Vec2::new(CAMERA_FORWARD_WORLD[0], CAMERA_FORWARD_WORLD[1]))
 }
 
-fn camera_right_world() -> Vec2<f32> {
-    normalize2(Vec2::new(CAMERA_RIGHT_WORLD[0], CAMERA_RIGHT_WORLD[1]))
+fn initial_camera_yaw_radians() -> f32 {
+    let forward = initial_camera_forward_world();
+    forward.y.atan2(forward.x)
+}
+
+fn camera_forward_from_yaw(yaw_radians: f32) -> Vec2<f32> {
+    normalize2(Vec2::new(yaw_radians.cos(), yaw_radians.sin()))
+}
+
+fn camera_right_from_yaw(yaw_radians: f32) -> Vec2<f32> {
+    normalize2(Vec2::new(-yaw_radians.sin(), yaw_radians.cos()))
 }
 
 fn normalize2(direction: Vec2<f32>) -> Vec2<f32> {
@@ -548,7 +586,7 @@ impl VoxygenWebClient {
         let center_chunk_pos = world_preview.initial_center_chunk_pos();
         let player_wpos = world_preview.initial_player_wpos();
         let world_mesh =
-            world_preview.generate_mesh(center_chunk_pos, Some(camera_forward_world()))?;
+            world_preview.generate_mesh(center_chunk_pos, Some(initial_camera_forward_world()))?;
         let player_terrain_z = world_preview.player_terrain_z(player_wpos);
         set_detail(
             "Original WorldSim terrain patch generated. Requesting browser WebGPU adapter...",
@@ -595,7 +633,12 @@ impl VoxygenWebClient {
             center_chunk_pos,
             world_mesh.vertical_origin,
         );
-        let camera_matrix = camera_view_projection(aspect, &world_mesh, player_render_pos);
+        let camera_matrix = camera_view_projection(
+            aspect,
+            player_render_pos,
+            initial_camera_yaw_radians(),
+            INITIAL_CAMERA_PITCH_RADIANS,
+        );
         let camera_buffer = create_buffer_with_data(
             &device,
             &matrix_bytes(&camera_matrix),
@@ -667,11 +710,15 @@ impl VoxygenWebClient {
             active_trade: None,
             keydown_listener: None,
             keyup_listener: None,
+            mousedown_listener: None,
+            mouseup_listener: None,
+            mousemove_listener: None,
         })
     }
 
     fn install_input_controls(client: Rc<RefCell<Self>>) -> Result<(), String> {
         let window = web_window()?;
+        let canvas = client.borrow()._canvas.clone();
 
         let keydown_client = Rc::clone(&client);
         let keydown_listener = Closure::wrap(Box::new(move |event: KeyboardEvent| {
@@ -696,9 +743,56 @@ impl VoxygenWebClient {
             .add_event_listener_with_callback("keyup", keyup_listener.as_ref().unchecked_ref())
             .map_err(|_| "failed to attach keyup controls".to_owned())?;
 
+        let mousedown_client = Rc::clone(&client);
+        let mousedown_listener = Closure::wrap(Box::new(move |event: MouseEvent| {
+            if event.button() == 0 {
+                mousedown_client.borrow_mut().set_camera_dragging(true);
+                event.prevent_default();
+            }
+        }) as Box<dyn FnMut(MouseEvent)>);
+        canvas
+            .add_event_listener_with_callback(
+                "mousedown",
+                mousedown_listener.as_ref().unchecked_ref(),
+            )
+            .map_err(|_| "failed to attach camera drag start".to_owned())?;
+
+        let mouseup_client = Rc::clone(&client);
+        let mouseup_listener = Closure::wrap(Box::new(move |event: MouseEvent| {
+            if event.button() == 0 {
+                mouseup_client.borrow_mut().set_camera_dragging(false);
+                event.prevent_default();
+            }
+        }) as Box<dyn FnMut(MouseEvent)>);
+        window
+            .add_event_listener_with_callback("mouseup", mouseup_listener.as_ref().unchecked_ref())
+            .map_err(|_| "failed to attach camera drag end".to_owned())?;
+
+        let mousemove_client = Rc::clone(&client);
+        let mousemove_listener = Closure::wrap(Box::new(move |event: MouseEvent| {
+            let buttons = event.buttons();
+            let mut client = mousemove_client.borrow_mut();
+            if buttons == 0 {
+                client.set_camera_dragging(false);
+                return;
+            }
+            if client.drag_camera(event.movement_x() as f32, event.movement_y() as f32) {
+                event.prevent_default();
+            }
+        }) as Box<dyn FnMut(MouseEvent)>);
+        window
+            .add_event_listener_with_callback(
+                "mousemove",
+                mousemove_listener.as_ref().unchecked_ref(),
+            )
+            .map_err(|_| "failed to attach camera drag movement".to_owned())?;
+
         let mut client = client.borrow_mut();
         client.keydown_listener = Some(keydown_listener);
         client.keyup_listener = Some(keyup_listener);
+        client.mousedown_listener = Some(mousedown_listener);
+        client.mouseup_listener = Some(mouseup_listener);
+        client.mousemove_listener = Some(mousemove_listener);
         Ok(())
     }
 
@@ -820,11 +914,25 @@ impl VoxygenWebClient {
         self.player.input.set_key_state(key, pressed)
     }
 
+    fn set_camera_dragging(&mut self, dragging: bool) { self.player.camera_dragging = dragging; }
+
+    fn drag_camera(&mut self, delta_x: f32, delta_y: f32) -> bool {
+        if !self.player.camera_dragging {
+            return false;
+        }
+
+        self.player.rotate_camera(delta_x, delta_y);
+        self.update_camera();
+        self.render_frame();
+        set_detail(&self.scene_summary());
+        true
+    }
+
     fn tick(&mut self, timestamp_ms: f64) -> Result<(), String> {
         let dt = self.player.frame_delta(timestamp_ms);
         let interact_requested = self.player.input.consume_interact_request();
         let mut trade_input = self.player.input.consume_trade_input();
-        let direction = self.player.input.direction();
+        let direction = self.player.movement_direction();
         let enter_as_interact = trade_input.accept_requested && self.active_trade.is_none();
         if enter_as_interact {
             trade_input.accept_requested = false;
@@ -957,8 +1065,12 @@ impl VoxygenWebClient {
             self.player.center_chunk_pos,
             self.world_mesh.vertical_origin,
         );
-        let camera_matrix =
-            camera_view_projection(self.player.aspect, &self.world_mesh, player_render_pos);
+        let camera_matrix = camera_view_projection(
+            self.player.aspect,
+            player_render_pos,
+            self.player.camera_yaw_radians,
+            self.player.camera_pitch_radians,
+        );
         self.queue
             .write_buffer(&self.camera_buffer, 0, &matrix_bytes(&camera_matrix));
     }
@@ -985,11 +1097,12 @@ impl VoxygenWebClient {
              {}x{} WorldSim. Original sites/settlements/POIs: {}/{}/{}. New chunks/meshes this \
              update: {}/{}. Prefetched chunks: {}/{}. Chunk/mesh cache: {}/{} retained within \
              radius {} (evicted {}). GPU chunk buffers: {}/{}. Player block position: ({:.1}, \
-             {:.1}). Player terrain z: {:.1}. Player facing: {:.0} deg. Blocked terrain moves: \
-             {}. WebGPU block faces: {}. Filled blocks: {}. Liquid blocks: {}. Terrain sprite \
-             props: {}. Visible entity markers: {}. Entity spawns: {}. Rtsim \
-             sites/existing/wanted: {}/{}/{} (merchants {}, guards {}). Site NPC/trader/market \
-             markers: {}/{}/{}. World features loaded: {}. Wildlife spawn manifests: {}. {}{}",
+             {:.1}). Player terrain z: {:.1}. Player facing: {:.0} deg. Camera yaw/pitch: \
+             {:.0}/{:.0} deg. Blocked terrain moves: {}. WebGPU block faces: {}. Filled blocks: \
+             {}. Liquid blocks: {}. Terrain sprite props: {}. Visible entity markers: {}. Entity \
+             spawns: {}. Rtsim sites/existing/wanted: {}/{}/{} (merchants {}, guards {}). Site \
+             NPC/trader/market markers: {}/{}/{}. World features loaded: {}. Wildlife spawn \
+             manifests: {}. {}{}",
             self.world_mesh.seed,
             self.world_preview.start_summary(),
             self.world_mesh.generated_chunks,
@@ -1015,6 +1128,8 @@ impl VoxygenWebClient {
             self.player.wpos.y,
             self.player.terrain_z,
             self.player.facing_yaw_radians().to_degrees(),
+            self.player.camera_yaw_radians.to_degrees(),
+            self.player.camera_pitch_radians.to_degrees(),
             self.player.blocked_move_count,
             self.world_mesh.terrain_faces,
             self.world_mesh.filled_blocks,
@@ -1566,18 +1681,21 @@ fn shade_marker_color(color: [f32; 3], face_index: usize) -> [f32; 3] {
 
 fn camera_view_projection(
     aspect: f32,
-    _world_mesh: &OriginalWorldMesh,
     player_render_pos: [f32; 3],
+    camera_yaw_radians: f32,
+    camera_pitch_radians: f32,
 ) -> [f32; 16] {
     let target = [
         player_render_pos[0],
         player_render_pos[1] + 3.6,
         player_render_pos[2],
     ];
+    let camera_forward = camera_forward_from_yaw(camera_yaw_radians);
+    let horizontal_distance = THIRD_PERSON_CAMERA_DISTANCE * camera_pitch_radians.cos();
     let eye = [
-        target[0] + THIRD_PERSON_CAMERA_DISTANCE * 0.58,
-        target[1] + THIRD_PERSON_CAMERA_DISTANCE * 0.44,
-        target[2] + THIRD_PERSON_CAMERA_DISTANCE * 0.72,
+        target[0] - camera_forward.x * horizontal_distance,
+        target[1] + THIRD_PERSON_CAMERA_DISTANCE * camera_pitch_radians.sin(),
+        target[2] - camera_forward.y * horizontal_distance,
     ];
     let up = [0.0, 1.0, 0.0];
     let view = look_at_rh(eye, target, up);
