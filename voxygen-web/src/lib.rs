@@ -248,14 +248,17 @@ impl VoxygenWebClient {
     fn scene_summary(&self) -> String {
         let (chunks_x, chunks_y) = self.world_mesh.chunk_dimensions;
         format!(
-            "Seed {} generated {}x{} original WorldSim chunks into a WebGPU 3D terrain mesh. \
-             Water chunks: {}. Dense forest chunks: {}. World features loaded: {}. Wildlife spawn \
-             manifests: {}.",
+            "Seed {} generated original TerrainChunk {:?} inside a {}x{} WorldSim. WebGPU block \
+             faces: {}. Filled blocks: {}. Liquid blocks: {}. Entity spawns: {}. World features \
+             loaded: {}. Wildlife spawn manifests: {}.",
             self.world_mesh.seed,
+            self.world_mesh.chunk_pos,
             chunks_x,
             chunks_y,
-            self.world_mesh.water_chunks,
-            self.world_mesh.forest_chunks,
+            self.world_mesh.terrain_faces,
+            self.world_mesh.filled_blocks,
+            self.world_mesh.liquid_blocks,
+            self.world_mesh.generated_entity_spawns,
             self.world_mesh.enabled_world_features,
             self.world_mesh.wildlife_spawn_manifests
         )

@@ -130,6 +130,14 @@ impl World {
         )
     }
 
+    #[doc(hidden)]
+    pub fn from_sim_for_web_preview(sim: sim::WorldSim) -> Self {
+        Self {
+            sim,
+            civs: civ::Civs::default(),
+        }
+    }
+
     pub fn generate(
         seed: u32,
         opts: sim::WorldOpts,

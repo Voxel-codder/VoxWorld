@@ -14,17 +14,18 @@ Current milestone:
 - load the first original world asset manifests from a WASM embedded
   `common-assets` source;
 - generate a small original `WorldSim` in the browser build path;
-- render that original chunk simulation as a WebGPU 3D terrain mesh with a
-  camera, vertex/index buffers, and depth testing;
+- call the real `World::generate_chunk` path and convert the generated
+  `TerrainChunk` blocks into a WebGPU 3D block-face mesh with a camera,
+  vertex/index buffers, and depth testing;
 - keep this as the stable place for future Voxygen renderer/HUD migration;
 - avoid extending the temporary 2D canvas client as if it were the final game.
 
 Next milestones:
 
-- use the embedded world manifests to call the real `World::generate_chunk`
-  path in the web scene;
-- replace the WorldSim overview mesh with Voxygen's real terrain chunk/block
-  meshing path;
+- replace the temporary block-face mesh with Voxygen's real greedy terrain mesh
+  and atlas/material pipeline;
+- embed the structure `.vox` subsets needed to turn terrain decorations, trees,
+  shrubs, and site structures back on in the web scene;
 - attach player/session state so the scene follows the live character instead
   of a fixed terrain camera;
 - introduce a browser-safe client transport that maps Voxygen networking onto a

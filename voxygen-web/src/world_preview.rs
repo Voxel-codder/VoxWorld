@@ -1,8 +1,13 @@
+use common::{
+    terrain::{Block, TerrainChunk, TerrainChunkSize},
+    vol::{ReadVol, RectVolSize},
+};
 use rayon::ThreadPoolBuilder;
-use vek::Vec2;
+use vek::{Vec2, Vec3};
 use veloren_world::{
+    World,
     config::Features,
-    index::Index,
+    index::{Index, IndexOwned, IndexRef},
     sim::{FileOpts, GenOpts, WorldOpts, WorldSim},
 };
 
@@ -12,8 +17,11 @@ pub struct OriginalWorldMesh {
     pub vertices: Vec<f32>,
     pub indices: Vec<u32>,
     pub chunk_dimensions: (u32, u32),
-    pub water_chunks: usize,
-    pub forest_chunks: usize,
+    pub chunk_pos: (i32, i32),
+    pub terrain_faces: usize,
+    pub filled_blocks: usize,
+    pub liquid_blocks: usize,
+    pub generated_entity_spawns: usize,
     pub enabled_world_features: usize,
     pub wildlife_spawn_manifests: usize,
     pub seed: u32,
@@ -42,100 +50,120 @@ pub fn build_original_world_mesh() -> Result<OriginalWorldMesh, String> {
         &threadpool,
         &|_| {},
     );
-
-    let index = Index::new(SEED);
-    let enabled_world_features = count_enabled_features(&index.features());
-    let wildlife_spawn_manifests = index.wildlife_spawns.len();
-
-    mesh_from_sim(&sim, SEED, enabled_world_features, wildlife_spawn_manifests)
-}
-
-fn mesh_from_sim(
-    sim: &WorldSim,
-    seed: u32,
-    enabled_world_features: usize,
-    wildlife_spawn_manifests: usize,
-) -> Result<OriginalWorldMesh, String> {
     let dimensions = sim.get_size();
     if dimensions.x < 2 || dimensions.y < 2 {
         return Err("original WorldSim generated too few chunks for terrain mesh".to_owned());
     }
 
-    let mut min_alt = f32::MAX;
-    let mut max_alt = f32::MIN;
-    for y in 0..dimensions.y {
-        for x in 0..dimensions.x {
-            let chunk = sim
-                .get(Vec2::new(x as i32, y as i32))
-                .ok_or_else(|| format!("missing generated SimChunk at {x},{y}"))?;
-            let surface_alt = chunk.alt.max(chunk.water_alt);
-            min_alt = min_alt.min(surface_alt);
-            max_alt = max_alt.max(surface_alt);
+    let world = World::from_sim_for_web_preview(sim);
+    let index_owned = IndexOwned::new(Index::new(SEED));
+    let index_ref = index_owned.as_index_ref();
+    let enabled_world_features = count_enabled_features(index_ref.features);
+    let wildlife_spawn_manifests = index_ref.wildlife_spawns.len();
+    let preview_features = terrain_chunk_preview_features(index_ref.features);
+    let preview_index = IndexRef {
+        features: &preview_features,
+        ..index_ref
+    };
+    let chunk_pos = Vec2::new(dimensions.x as i32 / 2, dimensions.y as i32 / 2);
+    let (terrain_chunk, supplement) = world
+        .generate_chunk(preview_index, chunk_pos, None, || false, None)
+        .map_err(|_| format!("original World::generate_chunk cancelled at {chunk_pos:?}"))?;
+
+    mesh_from_terrain_chunk(
+        &terrain_chunk,
+        dimensions,
+        chunk_pos,
+        SEED,
+        enabled_world_features,
+        wildlife_spawn_manifests,
+        supplement.entity_spawns.len(),
+    )
+}
+
+#[allow(clippy::struct_excessive_bools)]
+fn terrain_chunk_preview_features(features: &Features) -> Features {
+    Features {
+        caverns: features.caverns,
+        caves: features.caves,
+        rocks: features.rocks,
+        // These layers can pull .vox structure assets; they are enabled once the web
+        // asset pack grows beyond the first world manifest bundle.
+        shrubs: false,
+        trees: false,
+        scatter: features.scatter,
+        paths: features.paths,
+        spots: false,
+        wildlife_density: features.wildlife_density,
+        peak_naming: features.peak_naming,
+        biome_naming: features.biome_naming,
+        train_tracks: false,
+    }
+}
+
+fn mesh_from_terrain_chunk(
+    chunk: &TerrainChunk,
+    dimensions: Vec2<u32>,
+    chunk_pos: Vec2<i32>,
+    seed: u32,
+    enabled_world_features: usize,
+    wildlife_spawn_manifests: usize,
+    generated_entity_spawns: usize,
+) -> Result<OriginalWorldMesh, String> {
+    let min_z = chunk.get_min_z();
+    let max_z = chunk.get_max_z();
+    if max_z <= min_z {
+        return Err(format!(
+            "original TerrainChunk at {chunk_pos:?} has no vertical span"
+        ));
+    }
+
+    let mut builder = BlockMeshBuilder::new((min_z + max_z) as f32 * 0.5);
+    let mut filled_blocks = 0usize;
+    let mut liquid_blocks = 0usize;
+
+    for (pos, block) in chunk.iter_changed() {
+        let renderable = block.is_filled() || block.is_liquid();
+        if !renderable {
+            continue;
+        }
+        filled_blocks += usize::from(block.is_filled());
+        liquid_blocks += usize::from(block.is_liquid());
+
+        for face in Face::ALL {
+            if face_visible(chunk, pos, block, face) {
+                builder.add_face(pos, block, face);
+            }
         }
     }
 
-    let alt_span = (max_alt - min_alt).max(1.0);
-    let center_x = (dimensions.x.saturating_sub(1)) as f32 * 0.5;
-    let center_z = (dimensions.y.saturating_sub(1)) as f32 * 0.5;
-    let mut vertices =
-        Vec::with_capacity(dimensions.x as usize * dimensions.y as usize * FLOATS_PER_VERTEX);
-    let mut water_chunks = 0usize;
-    let mut forest_chunks = 0usize;
-
-    for y in 0..dimensions.y {
-        for x in 0..dimensions.x {
-            let chunk = sim
-                .get(Vec2::new(x as i32, y as i32))
-                .ok_or_else(|| format!("missing generated SimChunk at {x},{y}"))?;
-            let is_water = chunk.water_alt > chunk.alt + 0.5;
-            let surface_alt = if is_water { chunk.water_alt } else { chunk.alt };
-            let alt_norm = ((surface_alt - min_alt) / alt_span).clamp(0.0, 1.0);
-            let height = alt_norm * 13.5 - 3.5;
-            let color = chunk_color(
-                chunk.temp,
-                chunk.humidity,
-                chunk.tree_density,
-                alt_norm,
-                is_water,
-            );
-
-            water_chunks += usize::from(is_water);
-            forest_chunks += usize::from(!is_water && chunk.tree_density > 0.48);
-
-            vertices.extend_from_slice(&[
-                x as f32 - center_x,
-                height,
-                y as f32 - center_z,
-                color[0],
-                color[1],
-                color[2],
-            ]);
-        }
-    }
-
-    let mut indices = Vec::with_capacity(
-        dimensions.x.saturating_sub(1) as usize * dimensions.y.saturating_sub(1) as usize * 6,
-    );
-    for y in 0..dimensions.y - 1 {
-        for x in 0..dimensions.x - 1 {
-            let a = y * dimensions.x + x;
-            let b = a + 1;
-            let c = a + dimensions.x;
-            let d = c + 1;
-            indices.extend_from_slice(&[a, c, b, b, c, d]);
-        }
+    if builder.indices.is_empty() {
+        return Err(format!(
+            "original TerrainChunk at {chunk_pos:?} produced no visible block faces"
+        ));
     }
 
     Ok(OriginalWorldMesh {
-        vertices,
-        indices,
+        vertices: builder.vertices,
+        indices: builder.indices,
         chunk_dimensions: (dimensions.x, dimensions.y),
-        water_chunks,
-        forest_chunks,
+        chunk_pos: (chunk_pos.x, chunk_pos.y),
+        terrain_faces: builder.face_count,
+        filled_blocks,
+        liquid_blocks,
+        generated_entity_spawns,
         enabled_world_features,
         wildlife_spawn_manifests,
         seed,
     })
+}
+
+fn face_visible(chunk: &TerrainChunk, pos: Vec3<i32>, block: &Block, face: Face) -> bool {
+    match chunk.get(pos + face.normal()) {
+        Ok(neighbor) if block.is_liquid() => !neighbor.is_liquid(),
+        Ok(neighbor) => !neighbor.is_filled(),
+        Err(_) => true,
+    }
 }
 
 fn count_enabled_features(features: &Features) -> usize {
@@ -157,32 +185,119 @@ fn count_enabled_features(features: &Features) -> usize {
     .count()
 }
 
-fn chunk_color(
-    temp: f32,
-    humidity: f32,
-    tree_density: f32,
-    alt_norm: f32,
-    is_water: bool,
-) -> [f32; 3] {
-    if is_water {
-        return [
-            0.06,
-            0.25 + humidity.clamp(0.0, 0.45) * 0.22,
-            0.58 + alt_norm * 0.1,
-        ];
-    }
-    if alt_norm > 0.82 {
-        return [0.86, 0.9, 0.88];
-    }
-    if temp > 0.45 && humidity < 0.26 {
-        return [0.72, 0.62, 0.32];
-    }
-    if tree_density > 0.48 {
-        return [0.08, 0.34 + tree_density.clamp(0.0, 1.0) * 0.22, 0.12];
-    }
-    if humidity > 0.62 {
-        return [0.16, 0.42, 0.24];
+struct BlockMeshBuilder {
+    vertices: Vec<f32>,
+    indices: Vec<u32>,
+    face_count: usize,
+    vertical_origin: f32,
+}
+
+impl BlockMeshBuilder {
+    fn new(vertical_origin: f32) -> Self {
+        Self {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            face_count: 0,
+            vertical_origin,
+        }
     }
 
-    [0.34 + alt_norm * 0.18, 0.48 + humidity * 0.14, 0.22]
+    fn add_face(&mut self, pos: Vec3<i32>, block: &Block, face: Face) {
+        let base = (self.vertices.len() / FLOATS_PER_VERTEX) as u32;
+        let color = face.shade_color(block_color(block));
+        for corner in face.corners(pos) {
+            let [x, y, z] = self.render_point(corner);
+            self.vertices
+                .extend_from_slice(&[x, y, z, color[0], color[1], color[2]]);
+        }
+        self.indices
+            .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        self.face_count += 1;
+    }
+
+    fn render_point(&self, point: [f32; 3]) -> [f32; 3] {
+        let chunk_center = TerrainChunkSize::RECT_SIZE.x as f32 * 0.5;
+        [
+            (point[0] - chunk_center) * 0.64,
+            (point[2] - self.vertical_origin) * 0.28,
+            (point[1] - chunk_center) * 0.64,
+        ]
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Face {
+    PosX,
+    NegX,
+    PosY,
+    NegY,
+    PosZ,
+    NegZ,
+}
+
+impl Face {
+    const ALL: [Self; 6] = [
+        Self::PosX,
+        Self::NegX,
+        Self::PosY,
+        Self::NegY,
+        Self::PosZ,
+        Self::NegZ,
+    ];
+
+    fn normal(self) -> Vec3<i32> {
+        match self {
+            Self::PosX => Vec3::unit_x(),
+            Self::NegX => -Vec3::unit_x(),
+            Self::PosY => Vec3::unit_y(),
+            Self::NegY => -Vec3::unit_y(),
+            Self::PosZ => Vec3::unit_z(),
+            Self::NegZ => -Vec3::unit_z(),
+        }
+    }
+
+    fn shade_color(self, color: [f32; 3]) -> [f32; 3] {
+        let shade = match self {
+            Self::PosZ => 1.15,
+            Self::NegZ => 0.55,
+            Self::PosX | Self::PosY => 0.88,
+            Self::NegX | Self::NegY => 0.72,
+        };
+        color.map(|channel| (channel * shade).min(1.0))
+    }
+
+    fn corners(self, pos: Vec3<i32>) -> [[f32; 3]; 4] {
+        let x = pos.x as f32;
+        let y = pos.y as f32;
+        let z = pos.z as f32;
+        let x1 = x + 1.0;
+        let y1 = y + 1.0;
+        let z1 = z + 1.0;
+
+        match self {
+            Self::PosX => [[x1, y, z], [x1, y1, z], [x1, y1, z1], [x1, y, z1]],
+            Self::NegX => [[x, y1, z], [x, y, z], [x, y, z1], [x, y1, z1]],
+            Self::PosY => [[x1, y1, z], [x, y1, z], [x, y1, z1], [x1, y1, z1]],
+            Self::NegY => [[x, y, z], [x1, y, z], [x1, y, z1], [x, y, z1]],
+            Self::PosZ => [[x, y, z1], [x1, y, z1], [x1, y1, z1], [x, y1, z1]],
+            Self::NegZ => [[x, y1, z], [x1, y1, z], [x1, y, z], [x, y, z]],
+        }
+    }
+}
+
+fn block_color(block: &Block) -> [f32; 3] {
+    if block.is_liquid() {
+        return [0.08, 0.28, 0.72];
+    }
+
+    block
+        .get_color()
+        .map(|color| {
+            [
+                color.r as f32 / 255.0,
+                color.g as f32 / 255.0,
+                color.b as f32 / 255.0,
+            ]
+        })
+        .unwrap_or([0.58, 0.58, 0.62])
 }
