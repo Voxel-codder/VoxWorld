@@ -2,13 +2,13 @@
 
 mod world_preview;
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use vek::Vec2;
 use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
 use web_sys::{Document, HtmlCanvasElement, KeyboardEvent, Window};
 use world_preview::{
-    FLOATS_PER_VERTEX, OriginalEntityMarker, OriginalEntityMarkerShape, OriginalWorldMesh,
-    OriginalWorldPreview,
+    FLOATS_PER_VERTEX, OriginalEntityMarker, OriginalEntityMarkerShape, OriginalTerrainChunkMesh,
+    OriginalWorldMesh, OriginalWorldPreview,
 };
 
 const CANVAS_ID: &str = "voxworld-canvas";
@@ -100,9 +100,8 @@ struct VoxygenWebClient {
     _config: wgpu::SurfaceConfiguration,
     depth_view: wgpu::TextureView,
     terrain_pipeline: wgpu::RenderPipeline,
-    terrain_vertex_buffer: wgpu::Buffer,
-    terrain_index_buffer: wgpu::Buffer,
-    terrain_index_count: u32,
+    terrain_chunk_buffers: HashMap<(i32, i32), TerrainChunkGpuMesh>,
+    visible_terrain_chunks: Vec<(i32, i32)>,
     entity_marker_vertex_buffer: wgpu::Buffer,
     entity_marker_index_buffer: wgpu::Buffer,
     entity_marker_index_count: u32,
@@ -116,6 +115,12 @@ struct VoxygenWebClient {
     player: PlayerState,
     keydown_listener: Option<Closure<dyn FnMut(KeyboardEvent)>>,
     keyup_listener: Option<Closure<dyn FnMut(KeyboardEvent)>>,
+}
+
+struct TerrainChunkGpuMesh {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
 }
 
 struct PlayerState {
@@ -263,23 +268,9 @@ impl VoxygenWebClient {
         });
         let terrain_pipeline =
             create_terrain_pipeline(&device, config.format, &camera_bind_group_layout);
-        let terrain_vertex_buffer = create_buffer_with_data(
-            &device,
-            &f32_bytes(&world_mesh.vertices),
-            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            "Voxygen Web Terrain Vertex Buffer",
-        );
-        let terrain_index_buffer = create_buffer_with_data(
-            &device,
-            &u32_bytes(&world_mesh.indices),
-            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            "Voxygen Web Terrain Index Buffer",
-        );
-        let terrain_index_count = world_mesh
-            .indices
-            .len()
-            .try_into()
-            .map_err(|_| "terrain index count overflowed u32".to_owned())?;
+        let mut terrain_chunk_buffers = HashMap::new();
+        let visible_terrain_chunks =
+            sync_terrain_chunk_buffers(&device, &mut terrain_chunk_buffers, &world_mesh)?;
         let (entity_marker_vertex_buffer, entity_marker_index_buffer, entity_marker_index_count) =
             create_marker_buffers(&device, &world_mesh.entity_markers, "Entity");
         let player_marker = player_marker(world_preview.player_render_position(
@@ -298,9 +289,8 @@ impl VoxygenWebClient {
             _config: config,
             depth_view,
             terrain_pipeline,
-            terrain_vertex_buffer,
-            terrain_index_buffer,
-            terrain_index_count,
+            terrain_chunk_buffers,
+            visible_terrain_chunks,
             entity_marker_vertex_buffer,
             entity_marker_index_buffer,
             entity_marker_index_count,
@@ -420,12 +410,15 @@ impl VoxygenWebClient {
             });
             render_pass.set_pipeline(&self.terrain_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.terrain_vertex_buffer.slice(..));
-            render_pass.set_index_buffer(
-                self.terrain_index_buffer.slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
-            render_pass.draw_indexed(0..self.terrain_index_count, 0, 0..1);
+            for chunk_key in &self.visible_terrain_chunks {
+                let Some(chunk_mesh) = self.terrain_chunk_buffers.get(chunk_key) else {
+                    continue;
+                };
+                render_pass.set_vertex_buffer(0, chunk_mesh.vertex_buffer.slice(..));
+                render_pass
+                    .set_index_buffer(chunk_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(0..chunk_mesh.index_count, 0, 0..1);
+            }
 
             render_pass.set_vertex_buffer(0, self.entity_marker_vertex_buffer.slice(..));
             render_pass.set_index_buffer(
@@ -447,29 +440,12 @@ impl VoxygenWebClient {
     }
 
     fn upload_world_mesh(&mut self, world_mesh: OriginalWorldMesh) -> Result<(), String> {
-        let terrain_vertex_buffer = create_buffer_with_data(
-            &self.device,
-            &f32_bytes(&world_mesh.vertices),
-            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            "Voxygen Web Terrain Vertex Buffer",
-        );
-        let terrain_index_buffer = create_buffer_with_data(
-            &self.device,
-            &u32_bytes(&world_mesh.indices),
-            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            "Voxygen Web Terrain Index Buffer",
-        );
-        let terrain_index_count = world_mesh
-            .indices
-            .len()
-            .try_into()
-            .map_err(|_| "terrain index count overflowed u32".to_owned())?;
+        let visible_terrain_chunks =
+            sync_terrain_chunk_buffers(&self.device, &mut self.terrain_chunk_buffers, &world_mesh)?;
         let (entity_marker_vertex_buffer, entity_marker_index_buffer, entity_marker_index_count) =
             create_marker_buffers(&self.device, &world_mesh.entity_markers, "Entity");
 
-        self.terrain_vertex_buffer = terrain_vertex_buffer;
-        self.terrain_index_buffer = terrain_index_buffer;
-        self.terrain_index_count = terrain_index_count;
+        self.visible_terrain_chunks = visible_terrain_chunks;
         self.entity_marker_vertex_buffer = entity_marker_vertex_buffer;
         self.entity_marker_index_buffer = entity_marker_index_buffer;
         self.entity_marker_index_count = entity_marker_index_count;
@@ -543,10 +519,10 @@ impl VoxygenWebClient {
         let (patch_x, patch_y) = self.world_mesh.chunk_patch;
         format!(
             "Seed {} rendered {} original TerrainChunks in a {}x{} patch around {:?} inside a \
-             {}x{} WorldSim. New chunks/meshes this update: {}/{}. Chunk/mesh cache: {}/{}. \
-             Player block position: ({:.1}, {:.1}). WebGPU block faces: {}. Filled blocks: {}. \
-             Liquid blocks: {}. Visible entity markers: {}. Entity spawns: {}. World features \
-             loaded: {}. Wildlife spawn manifests: {}.",
+             {}x{} WorldSim. New chunks/meshes this update: {}/{}. Chunk/mesh cache: {}/{}. GPU \
+             chunk buffers: {}/{}. Player block position: ({:.1}, {:.1}). WebGPU block faces: {}. \
+             Filled blocks: {}. Liquid blocks: {}. Visible entity markers: {}. Entity spawns: {}. \
+             World features loaded: {}. Wildlife spawn manifests: {}.",
             self.world_mesh.seed,
             self.world_mesh.generated_chunks,
             patch_x,
@@ -558,6 +534,8 @@ impl VoxygenWebClient {
             self.world_mesh.newly_meshed_chunks,
             self.world_mesh.cached_chunks,
             self.world_mesh.cached_mesh_chunks,
+            self.visible_terrain_chunks.len(),
+            self.terrain_chunk_buffers.len(),
             self.player.wpos.x,
             self.player.wpos.y,
             self.world_mesh.terrain_faces,
@@ -677,6 +655,50 @@ fn create_buffer_with_data(
     }
     buffer.unmap();
     buffer
+}
+
+fn sync_terrain_chunk_buffers(
+    device: &wgpu::Device,
+    cache: &mut HashMap<(i32, i32), TerrainChunkGpuMesh>,
+    world_mesh: &OriginalWorldMesh,
+) -> Result<Vec<(i32, i32)>, String> {
+    let mut visible_chunks = Vec::with_capacity(world_mesh.terrain_chunks.len());
+    for terrain_chunk in &world_mesh.terrain_chunks {
+        let key = terrain_chunk.chunk_pos;
+        if !cache.contains_key(&key) {
+            cache.insert(key, create_terrain_chunk_buffer(device, terrain_chunk)?);
+        }
+        visible_chunks.push(key);
+    }
+    Ok(visible_chunks)
+}
+
+fn create_terrain_chunk_buffer(
+    device: &wgpu::Device,
+    terrain_chunk: &OriginalTerrainChunkMesh,
+) -> Result<TerrainChunkGpuMesh, String> {
+    let vertex_buffer = create_buffer_with_data(
+        device,
+        &f32_bytes(&terrain_chunk.vertices),
+        wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        "Voxygen Web Terrain Chunk Vertex Buffer",
+    );
+    let index_buffer = create_buffer_with_data(
+        device,
+        &u32_bytes(&terrain_chunk.indices),
+        wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        "Voxygen Web Terrain Chunk Index Buffer",
+    );
+    let index_count = terrain_chunk
+        .indices
+        .len()
+        .try_into()
+        .map_err(|_| "terrain chunk index count overflowed u32".to_owned())?;
+    Ok(TerrainChunkGpuMesh {
+        vertex_buffer,
+        index_buffer,
+        index_count,
+    })
 }
 
 fn create_marker_buffers(

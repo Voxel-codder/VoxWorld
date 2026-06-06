@@ -35,8 +35,7 @@ pub struct OriginalWorldPreview {
 }
 
 pub struct OriginalWorldMesh {
-    pub vertices: Vec<f32>,
-    pub indices: Vec<u32>,
+    pub terrain_chunks: Vec<OriginalTerrainChunkMesh>,
     pub entity_markers: Vec<OriginalEntityMarker>,
     pub chunk_dimensions: (u32, u32),
     pub center_chunk_pos: (i32, i32),
@@ -54,6 +53,12 @@ pub struct OriginalWorldMesh {
     pub enabled_world_features: usize,
     pub wildlife_spawn_manifests: usize,
     pub seed: u32,
+}
+
+pub struct OriginalTerrainChunkMesh {
+    pub chunk_pos: (i32, i32),
+    pub vertices: Vec<f32>,
+    pub indices: Vec<u32>,
 }
 
 #[derive(Clone, Copy)]
@@ -327,6 +332,7 @@ fn mesh_from_terrain_chunks(
     let mut liquid_blocks = 0usize;
     let mut generated_entity_spawns = 0usize;
     let mut entity_markers = Vec::new();
+    let mut terrain_chunks = Vec::new();
 
     for preview_chunk in chunks {
         generated_entity_spawns += count_entity_spawns(&preview_chunk.entity_spawns);
@@ -337,7 +343,14 @@ fn mesh_from_terrain_chunks(
             &mut entity_markers,
         );
         let chunk_origin = relative_chunk_origin(preview_chunk.pos, center_chunk_pos);
+        let mut chunk_builder = PatchMeshBuilder::new(vertical_origin);
+        chunk_builder.append_chunk_mesh(&preview_chunk.mesh, chunk_origin);
         builder.append_chunk_mesh(&preview_chunk.mesh, chunk_origin);
+        terrain_chunks.push(OriginalTerrainChunkMesh {
+            chunk_pos: chunk_key(preview_chunk.pos),
+            vertices: chunk_builder.vertices,
+            indices: chunk_builder.indices,
+        });
         filled_blocks += preview_chunk.mesh.filled_blocks;
         liquid_blocks += preview_chunk.mesh.liquid_blocks;
     }
@@ -351,8 +364,7 @@ fn mesh_from_terrain_chunks(
 
     let patch_side = (chunk_radius * 2 + 1).max(1) as u32;
     Ok(OriginalWorldMesh {
-        vertices: builder.vertices,
-        indices: builder.indices,
+        terrain_chunks,
         entity_markers,
         chunk_dimensions: (dimensions.x, dimensions.y),
         center_chunk_pos: (center_chunk_pos.x, center_chunk_pos.y),

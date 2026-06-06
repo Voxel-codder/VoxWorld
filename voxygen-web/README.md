@@ -26,6 +26,8 @@ Current milestone:
 - cache generated original `TerrainChunk` data, supplements, and chunk-local
   block-face mesh fragments so moving across chunk boundaries only generates
   newly visible chunks and meshes;
+- upload visible terrain as per-chunk WebGPU vertex/index buffers and cache
+  those buffers across chunk-boundary movement;
 - track a browser-side player block position with continuous keyboard movement,
   update the camera every animation frame, and upload a regenerated terrain
   patch when the player crosses a chunk boundary;
@@ -45,8 +47,9 @@ Next milestones:
   and atlas/material pipeline;
 - replace entity and player temporary silhouettes with Voxygen body meshes,
   loadouts, and animation state;
-- replace the cached 5x5 patch mesh assembly with fully incremental GPU chunk
-  buffer streaming around the live player position;
+- replace the visible 5x5 GPU chunk-buffer set with fully streamed loading,
+  eviction, and independent chunk draw management around the live player
+  position;
 - attach player/session state so the scene follows the live character instead
   of a fixed terrain camera;
 - introduce a browser-safe client transport that maps Voxygen networking onto a
