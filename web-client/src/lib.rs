@@ -3,9 +3,9 @@ use std::{cell::RefCell, rc::Rc};
 use js_sys::Reflect;
 use wasm_bindgen::{JsCast, prelude::*};
 use web_sys::{
-    BinaryType, CanvasRenderingContext2d, CloseEvent, Document, ErrorEvent, Event,
+    BinaryType, CanvasRenderingContext2d, CloseEvent, Document, Element, ErrorEvent, Event,
     HtmlButtonElement, HtmlCanvasElement, HtmlElement, HtmlInputElement, KeyboardEvent,
-    MessageEvent, WebSocket, Window,
+    MessageEvent, PointerEvent, WebSocket, Window,
 };
 
 thread_local! {
@@ -23,6 +23,9 @@ struct InputState {
     right: bool,
     up: bool,
     down: bool,
+    look_x: f32,
+    look_y: f32,
+    look_z: f32,
 }
 
 #[derive(Clone)]
@@ -51,6 +54,9 @@ impl InputState {
             right: false,
             up: false,
             down: false,
+            look_x: 0.0,
+            look_y: 1.0,
+            look_z: 0.0,
         }
     }
 
@@ -73,6 +79,8 @@ impl InputState {
 
         (x, y, z)
     }
+
+    fn look(self) -> (f32, f32, f32) { (self.look_x, self.look_y, self.look_z) }
 }
 
 #[wasm_bindgen(start)]
@@ -96,6 +104,7 @@ pub fn start() -> Result<(), JsValue> {
 
     resize_canvas(&canvas)?;
     install_resize_handler(&window, canvas.clone())?;
+    install_pointer_handlers(&canvas)?;
     start_render_loop(&window, canvas, context)?;
     install_connect_handler(connect_button, server_url, status.clone())?;
     install_chat_handler(chat_form, chat_input, status)?;
@@ -389,6 +398,9 @@ fn append_chat_line(kind: &str, text: &str) {
 
 fn install_keyboard_handlers(window: &Window) -> Result<(), JsValue> {
     let on_keydown = Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
+        if focused_text_field() {
+            return;
+        }
         if update_key(event.key().as_str(), true) {
             event.prevent_default();
             send_input_state();
@@ -398,6 +410,9 @@ fn install_keyboard_handlers(window: &Window) -> Result<(), JsValue> {
     on_keydown.forget();
 
     let on_keyup = Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
+        if focused_text_field() {
+            return;
+        }
         if update_key(event.key().as_str(), false) {
             event.prevent_default();
             send_input_state();
@@ -407,6 +422,19 @@ fn install_keyboard_handlers(window: &Window) -> Result<(), JsValue> {
     on_keyup.forget();
 
     Ok(())
+}
+
+fn focused_text_field() -> bool {
+    web_window()
+        .ok()
+        .and_then(|window| window.document())
+        .and_then(|document| document.active_element())
+        .is_some_and(|element| {
+            element.dyn_ref::<HtmlInputElement>().is_some()
+                || element
+                    .dyn_ref::<Element>()
+                    .is_some_and(|element| element.has_attribute("contenteditable"))
+        })
 }
 
 fn update_key(key: &str, pressed: bool) -> bool {
@@ -426,10 +454,62 @@ fn update_key(key: &str, pressed: bool) -> bool {
     })
 }
 
+fn install_pointer_handlers(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
+    let move_canvas = canvas.clone();
+    let on_pointer_move = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+        event.prevent_default();
+        update_look_from_pointer(&move_canvas, event.client_x(), event.client_y());
+        send_input_state();
+    });
+    canvas.add_event_listener_with_callback(
+        "pointermove",
+        on_pointer_move.as_ref().unchecked_ref(),
+    )?;
+    on_pointer_move.forget();
+
+    let down_canvas = canvas.clone();
+    let on_pointer_down = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+        event.prevent_default();
+        update_look_from_pointer(&down_canvas, event.client_x(), event.client_y());
+        send_input_state();
+    });
+    canvas.add_event_listener_with_callback(
+        "pointerdown",
+        on_pointer_down.as_ref().unchecked_ref(),
+    )?;
+    on_pointer_down.forget();
+    Ok(())
+}
+
+fn update_look_from_pointer(canvas: &HtmlCanvasElement, client_x: i32, client_y: i32) {
+    let element: &Element = canvas.unchecked_ref();
+    let rect = element.get_bounding_client_rect();
+    let center_x = rect.left() + rect.width() * 0.5;
+    let center_y = rect.top() + rect.height() * 0.5;
+    let dx = f64::from(client_x) - center_x;
+    let dy = center_y - f64::from(client_y);
+    let magnitude = (dx * dx + dy * dy).sqrt();
+
+    if !magnitude.is_finite() || magnitude < 8.0 {
+        return;
+    }
+
+    let look_x = (dx / magnitude) as f32;
+    let look_y = (dy / magnitude) as f32;
+
+    INPUT.with(|input| {
+        let mut input = input.borrow_mut();
+        input.look_x = look_x;
+        input.look_y = look_y;
+        input.look_z = 0.0;
+    });
+}
+
 fn send_input_state() {
     let (move_x, move_y, move_z) = INPUT.with(|input| input.borrow().movement());
+    let (look_x, look_y, look_z) = INPUT.with(|input| input.borrow().look());
     let message = format!(
-        r#"{{"type":"input","move_x":{move_x},"move_y":{move_y},"move_z":{move_z},"look_x":0,"look_y":1,"look_z":0}}"#
+        r#"{{"type":"input","move_x":{move_x},"move_y":{move_y},"move_z":{move_z},"look_x":{look_x},"look_y":{look_y},"look_z":{look_z}}}"#
     );
 
     SOCKET.with(|slot| {
@@ -540,6 +620,7 @@ fn draw_snapshot(
     let center_x = width * 0.5;
     let center_y = height * 0.5;
     let scale = 4.0;
+    let (look_x, look_y, _) = INPUT.with(|input| input.borrow().look());
 
     context.set_fill_style(&JsValue::from_str("#07111f"));
     context.fill_rect(0.0, 0.0, width, height);
@@ -590,6 +671,16 @@ fn draw_snapshot(
             }
         }
     }
+
+    context.set_stroke_style(&JsValue::from_str("rgba(231, 247, 255, 0.86)"));
+    context.set_line_width(2.0);
+    context.begin_path();
+    context.move_to(center_x, center_y);
+    context.line_to(
+        center_x + f64::from(look_x) * 34.0,
+        center_y - f64::from(look_y) * 34.0,
+    );
+    context.stroke();
 
     context.set_fill_style(&JsValue::from_str("#e7f7ff"));
     context.set_font("700 20px system-ui, sans-serif");

@@ -41,7 +41,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::Notify;
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 
 lazy_static::lazy_static! {
     pub static ref LOG: TuiLog<'static> = TuiLog::default();
@@ -130,6 +130,7 @@ fn main() -> io::Result<()> {
     if no_auth {
         server_settings.auth_server_address = None;
     }
+    apply_env_overrides(&mut server_settings);
 
     // Relative to data_dir
     const PERSISTENCE_DB_DIR: &str = "saves";
@@ -282,6 +283,51 @@ fn main() -> io::Result<()> {
     metrics_shutdown.notify_one();
 
     Ok(())
+}
+
+fn apply_env_overrides(server_settings: &mut server::Settings) {
+    const MAX_PLAYERS_ENV: &str = "VOXWORLD_MAX_PLAYERS";
+
+    let Ok(raw_max_players) = std::env::var(MAX_PLAYERS_ENV) else {
+        return;
+    };
+
+    match parse_max_players_override(&raw_max_players) {
+        Some(max_players) => {
+            server_settings.max_players = max_players;
+            info!(
+                max_players,
+                "Applied server max player override from {MAX_PLAYERS_ENV}"
+            );
+        },
+        _ => {
+            warn!(
+                value = raw_max_players,
+                "Ignoring invalid {MAX_PLAYERS_ENV}; expected an integer from 1 to 65535"
+            );
+        },
+    }
+}
+
+fn parse_max_players_override(raw: &str) -> Option<u16> {
+    raw.parse::<u16>().ok().filter(|value| *value > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_max_players_override;
+
+    #[test]
+    fn parses_valid_max_player_override() {
+        assert_eq!(parse_max_players_override("100"), Some(100));
+    }
+
+    #[test]
+    fn rejects_invalid_max_player_override() {
+        assert_eq!(parse_max_players_override("0"), None);
+        assert_eq!(parse_max_players_override("many"), None);
+        assert_eq!(parse_max_players_override("70000"), None);
+    }
 }
 
 fn server_loop(
