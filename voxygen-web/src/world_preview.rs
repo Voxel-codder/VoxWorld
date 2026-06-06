@@ -100,11 +100,12 @@ pub struct TradePanelPreview {
 
 #[derive(Clone)]
 pub struct TradePanelWare {
-    pub item_id: String,
+    pub item_definition_id: ItemDefinitionIdOwned,
     pub name: String,
     pub quality: String,
     pub buy: String,
     pub sell: String,
+    pub amount: u32,
     pub buy_coins: f32,
     pub sell_coins: f32,
 }
@@ -164,8 +165,10 @@ struct TradePreview {
 }
 
 struct TradePreviewItem {
-    item_id: &'static str,
+    item_id: String,
+    item_definition_id: ItemDefinitionIdOwned,
     name: String,
+    amount: u32,
     buy_coins: f32,
     sell_coins: f32,
     quality: Quality,
@@ -230,11 +233,12 @@ impl TradePreviewItem {
 
     fn panel_ware(&self) -> TradePanelWare {
         TradePanelWare {
-            item_id: self.item_id.to_owned(),
+            item_definition_id: self.item_definition_id.clone(),
             name: self.name.clone(),
             quality: format!("{:?}", self.quality),
             buy: format!("{}c", format_coin_price(self.buy_coins)),
             sell: format!("{}c", format_coin_price(self.sell_coins)),
+            amount: self.amount,
             buy_coins: self.buy_coins,
             sell_coins: self.sell_coins,
         }
@@ -723,13 +727,106 @@ fn trade_preview_for_marker(
 
     let site_prices = site_prices?;
     let stock = site_stock_summary(site_information, label);
-    let wares = trade_sample_items(label)
-        .iter()
-        .filter_map(|item_id| trade_preview_item(site_prices, item_id))
-        .take(3)
-        .collect::<Vec<_>>();
+    let mut wares = trade_priced_items_from_site_stock(site_prices, site_information, label);
+    if wares.is_empty() {
+        wares = trade_sample_items(label)
+            .iter()
+            .filter_map(|item_id| {
+                trade_preview_item(
+                    site_prices,
+                    ItemDefinitionIdOwned::Simple((*item_id).to_owned()),
+                    1,
+                    label,
+                )
+            })
+            .take(3)
+            .collect::<Vec<_>>();
+    }
 
     Some(TradePreview { wares, stock })
+}
+
+fn trade_priced_items_from_site_stock(
+    site_prices: &SitePrices,
+    site_information: Option<&SiteInformation>,
+    label: &'static str,
+) -> Vec<TradePreviewItem> {
+    let Some(site_information) = site_information else {
+        return Vec::new();
+    };
+    let mut stockmap = site_information.unconsumed_stock.clone();
+    apply_original_trader_stock_adjustments(&mut stockmap, label);
+
+    let mut wares = TradePricing::random_items(&mut stockmap, 8, true, true, 16, |good| {
+        trade_good_allowed(label, good)
+    })
+    .into_iter()
+    .filter_map(|(item_definition_id, amount)| {
+        trade_preview_item(site_prices, item_definition_id, amount.max(1), label)
+    })
+    .collect::<Vec<_>>();
+
+    sort_trade_preview_items(&mut wares);
+    wares.truncate(3);
+    wares
+}
+
+fn apply_original_trader_stock_adjustments(
+    stockmap: &mut hashbrown::HashMap<Good, f32>,
+    label: &'static str,
+) {
+    stockmap
+        .entry(Good::Ingredients)
+        .and_modify(|amount| {
+            *amount = amount.max(10_000.0);
+            *amount *= 100_000.0;
+            *amount = amount.min(2_000_000.0);
+        })
+        .or_insert(1_000_000.0);
+    stockmap
+        .entry(Good::Wood)
+        .and_modify(|amount| {
+            *amount = amount.max(10_000.0);
+            *amount *= 100_000.0;
+            *amount = amount.min(2_000_000.0);
+        })
+        .or_insert(1_000_000.0);
+    stockmap
+        .entry(Good::Recipe)
+        .and_modify(|amount| *amount = amount.max(10_000.0))
+        .or_insert(10_000.0);
+    stockmap
+        .entry(Good::Food)
+        .and_modify(|amount| *amount = amount.max(10_000.0))
+        .or_insert(10_000.0);
+    stockmap
+        .entry(Good::Potions)
+        .and_modify(|amount| *amount = amount.powf(0.25));
+    stockmap
+        .entry(Good::Coin)
+        .and_modify(|amount| *amount = amount.min(trade_coin_cap(label)));
+
+    for (good, amount) in stockmap.iter_mut() {
+        if !matches!(good, Good::Coin) {
+            *amount *= 0.1;
+        }
+    }
+}
+
+fn trade_coin_cap(label: &'static str) -> f32 {
+    match label {
+        "board" | "merchant" => 3_000.0,
+        _ => 300.0,
+    }
+}
+
+fn sort_trade_preview_items(wares: &mut [TradePreviewItem]) {
+    wares.sort_by(|a, b| {
+        a.quality
+            .cmp(&b.quality)
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.item_id.cmp(&b.item_id))
+    });
 }
 
 fn site_stock_summary(
@@ -752,8 +849,17 @@ fn site_stock_summary(
     goods
 }
 
-fn trade_preview_item(site_prices: &SitePrices, item_id: &'static str) -> Option<TradePreviewItem> {
-    let item_definition_id = ItemDefinitionIdOwned::Simple(item_id.to_owned());
+fn trade_preview_item(
+    site_prices: &SitePrices,
+    item_definition_id: ItemDefinitionIdOwned,
+    amount: u32,
+    label: &'static str,
+) -> Option<TradePreviewItem> {
+    let item_id = item_definition_id
+        .as_ref()
+        .itemdef_id()
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{item_definition_id:?}"));
     let materials = TradePricing::get_materials(&item_definition_id.as_ref())?;
     let coin_price = site_prices
         .values
@@ -767,6 +873,9 @@ fn trade_preview_item(site_prices: &SitePrices, item_id: &'static str) -> Option
         &MaterialStatManifest::load().read(),
     )
     .map_or(Quality::Low, |item| item.quality());
+    if !trade_quality_allowed(label, quality) {
+        return None;
+    }
     let buy_coins = materials
         .iter()
         .map(|(amount, good)| site_prices.values.get(good).copied().unwrap_or_default() * amount)
@@ -782,9 +891,13 @@ fn trade_preview_item(site_prices: &SitePrices, item_id: &'static str) -> Option
         .sum::<f32>()
         / coin_price;
 
+    let name = short_item_name(&item_id);
+
     Some(TradePreviewItem {
+        item_definition_id,
         item_id,
-        name: short_item_name(item_id),
+        name,
+        amount,
         buy_coins,
         sell_coins,
         quality,
@@ -838,8 +951,8 @@ fn trade_good_allowed(label: &'static str, good: Good) -> bool {
             good,
             Good::Potions | Good::Stone | Good::Wood | Good::Ingredients | Good::Coin
         ),
-        "blacksmith" | "workshop" => matches!(good, Good::Armor | Good::Tools | Good::Coin),
-        "hunter" => matches!(good, Good::Tools | Good::Food | Good::Coin),
+        "blacksmith" | "workshop" => matches!(good, Good::Armor | Good::Coin),
+        "hunter" => matches!(good, Good::Tools | Good::Coin),
         "board" => matches!(
             good,
             Good::Food
@@ -852,11 +965,26 @@ fn trade_good_allowed(label: &'static str, good: Good) -> bool {
                 | Good::Coin
                 | Good::Recipe
         ),
+        "merchant" => !matches!(
+            good,
+            Good::Ingredients
+                | Good::Tools
+                | Good::Armor
+                | Good::Wood
+                | Good::Territory(_)
+                | Good::Terrain(_)
+                | Good::Transportation
+                | Good::RoadSecurity
+        ),
         _ => !matches!(
             good,
             Good::Territory(_) | Good::Terrain(_) | Good::Transportation | Good::RoadSecurity
         ),
     }
+}
+
+fn trade_quality_allowed(_label: &'static str, quality: Quality) -> bool {
+    matches!(quality, Quality::Low | Quality::Common | Quality::Moderate)
 }
 
 fn short_item_name(item_id: &str) -> String {

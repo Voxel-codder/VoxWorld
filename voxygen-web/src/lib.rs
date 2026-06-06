@@ -444,8 +444,15 @@ fn preview_trade_inventories(panel: &TradePanelPreview) -> (Inventory, Inventory
     let _ = coins.set_amount(coins.max_amount().min(10_000));
     let _ = player_inventory.push(coins);
 
+    let ability_map = AbilityMap::load().read();
+    let msm = MaterialStatManifest::load().read();
     for ware in &panel.wares {
-        let item = Item::new_from_asset_expect(&ware.item_id);
+        let Ok(mut item) =
+            Item::new_from_item_definition_id(ware.item_definition_id.as_ref(), &ability_map, &msm)
+        else {
+            continue;
+        };
+        let _ = item.set_amount(ware.amount.clamp(1, item.max_amount()));
         let _ = merchant_inventory.push(item);
     }
 
@@ -1873,6 +1880,15 @@ fn append_ware_row(
         name_cell.set_class_name("ware-name");
         name_cell.set_text_content(Some(&ware.name));
         append_text_element(document, &name_cell, "span", "ware-quality", &ware.quality);
+        if ware.amount > 1 {
+            append_text_element(
+                document,
+                &name_cell,
+                "span",
+                "ware-quality",
+                &format!("x{}", ware.amount),
+            );
+        }
         let _ = row.append_child(&name_cell);
     }
     append_price_cell(document, &row, "Buy", &ware.buy);

@@ -88,6 +88,10 @@ Current milestone:
   trade against cloned player/merchant `Inventory` values using original
   `Inventory::take_amount` and `Inventory::push_all` item transfer paths, then
   display the resulting inventory slot counts;
+- derive browser-side trader/market preview wares from original
+  `TradePricing::random_items` against site stock, using the server trader
+  stock adjustments, profession-style good filters, quality filters, and stack
+  amounts instead of fixed sample-only item lists;
 - preserve original `EntityInfo.body` categories in the web preview and render
   body-aware temporary silhouettes for humanoid, quadruped, flyer, fish, large,
   and object entities;

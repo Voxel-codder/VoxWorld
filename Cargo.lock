@@ -9248,6 +9248,7 @@ name = "voxworld-voxygen-web"
 version = "0.18.0"
 dependencies = [
  "console_error_panic_hook",
+ "hashbrown 0.16.0",
  "js-sys",
  "rayon",
  "vek 0.17.2",

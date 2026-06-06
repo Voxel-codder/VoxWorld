@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 common = { package = "veloren-common", path = "../common" }
 console_error_panic_hook = "0.1"
+hashbrown = { workspace = true }
 js-sys = "0.3"
 rayon = { workspace = true }
 vek = { workspace = true }
