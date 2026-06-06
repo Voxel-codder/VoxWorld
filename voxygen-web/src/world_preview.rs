@@ -9,6 +9,7 @@ use common::{
     },
     generation::{EntityInfo, EntitySpawn, SpecialEntity},
     rtsim::{Profession, WorldSettings},
+    store::Id,
     terrain::{Block, BlockKind, SpriteKind, TerrainChunk, TerrainChunkSize, sprite::Category},
     trade::{Good, SiteInformation, SitePrices},
     vol::{ReadVol, RectVolSize},
@@ -21,7 +22,7 @@ use veloren_world::{
     config::Features,
     index::{IndexOwned, IndexRef},
     sim::{FileOpts, GenOpts, WorldOpts},
-    site::{PlotKind, SiteKind, plot::PlotKindMeta},
+    site::{PlotKind, Site as WorldSite, SiteKind, plot::PlotKindMeta},
 };
 
 pub const FLOATS_PER_VERTEX: usize = 9;
@@ -337,7 +338,7 @@ impl OriginalWorldPreview {
                 world.civs().pois.values().len(),
                 rtsim_stats,
                 select_preview_start(&world, index_ref, dimensions),
-                collect_site_markers(&world, index_ref),
+                collect_site_markers(&world, index_ref, &rtsim_data),
             )
         };
 
@@ -739,7 +740,11 @@ fn select_preview_start(
     }
 }
 
-fn collect_site_markers(world: &World, index: IndexRef) -> Vec<OriginalSiteMarker> {
+fn collect_site_markers(
+    world: &World,
+    index: IndexRef,
+    rtsim_data: &rtsim::Data,
+) -> Vec<OriginalSiteMarker> {
     world
         .civs()
         .sites
@@ -773,48 +778,32 @@ fn collect_site_markers(world: &World, index: IndexRef) -> Vec<OriginalSiteMarke
                 }
             }
 
-            if site.kind.is_some_and(|kind| {
+            let rtsim_roster = rtsim_site_profession_roster(rtsim_data, site_id);
+            if !rtsim_roster.is_empty() {
+                append_site_profession_markers(
+                    &mut markers,
+                    world.sim(),
+                    site,
+                    &site_name,
+                    site_prices.as_ref(),
+                    site_information.as_ref(),
+                    rtsim_roster,
+                );
+            } else if site.kind.is_some_and(|kind| {
                 matches!(
                     kind.meta(),
                     Some(common::terrain::SiteKindMeta::Settlement(_))
                 )
             }) {
-                let spawn_tiles = site_npc_spawn_tiles(site);
-                let town_plots = site.plots().len();
-                let guards = town_plots / 4;
-                let adventurers = town_plots / 5;
-                let merchants = town_plots / 6 + 1;
-                let town_professions = town_plots.saturating_sub(guards + adventurers);
-                let roster = rtsim_site_roster(guards, adventurers, merchants, town_professions);
-
-                for (index, profession) in roster.into_iter().enumerate() {
-                    let tile = spawn_tiles
-                        .get(index % spawn_tiles.len().max(1))
-                        .copied()
-                        .unwrap_or_else(|| {
-                            site.plazas()
-                                .next()
-                                .map(|plaza| site.plot(plaza).root_tile())
-                                .unwrap_or_default()
-                        });
-                    let (kind, label) = marker_from_rtsim_profession(profession);
-                    let trade_preview = trade_preview_for_marker(
-                        kind,
-                        label,
-                        site_prices.as_ref(),
-                        site_information.as_ref(),
-                    );
-                    markers.push(site_marker_at_plot(
-                        world.sim(),
-                        site,
-                        &site_name,
-                        kind,
-                        label,
-                        tile,
-                        marker_offset(index),
-                        trade_preview,
-                    ));
-                }
+                append_site_profession_markers(
+                    &mut markers,
+                    world.sim(),
+                    site,
+                    &site_name,
+                    site_prices.as_ref(),
+                    site_information.as_ref(),
+                    fallback_settlement_profession_roster(site),
+                );
             }
 
             markers
@@ -1179,6 +1168,76 @@ fn site_npc_spawn_tiles(site: &veloren_world::site::Site) -> Vec<Vec2<i32>> {
         tiles.push(Vec2::zero());
     }
     tiles
+}
+
+fn append_site_profession_markers(
+    markers: &mut Vec<OriginalSiteMarker>,
+    sim: &veloren_world::sim::WorldSim,
+    site: &veloren_world::site::Site,
+    site_name: &str,
+    site_prices: Option<&SitePrices>,
+    site_information: Option<&SiteInformation>,
+    roster: Vec<Profession>,
+) {
+    let spawn_tiles = site_npc_spawn_tiles(site);
+    for (roster_index, profession) in roster.into_iter().enumerate() {
+        let tile = spawn_tiles
+            .get(roster_index % spawn_tiles.len().max(1))
+            .copied()
+            .unwrap_or_else(|| {
+                site.plazas()
+                    .next()
+                    .map(|plaza| site.plot(plaza).root_tile())
+                    .unwrap_or_default()
+            });
+        let (kind, label) = marker_from_rtsim_profession(profession);
+        let trade_preview = trade_preview_for_marker(kind, label, site_prices, site_information);
+        markers.push(site_marker_at_plot(
+            sim,
+            site,
+            site_name,
+            kind,
+            label,
+            tile,
+            marker_offset(roster_index),
+            trade_preview,
+        ));
+    }
+}
+
+fn rtsim_site_profession_roster(
+    rtsim_data: &rtsim::Data,
+    world_site_id: Id<WorldSite>,
+) -> Vec<Profession> {
+    let Some(rtsim_site_id) = rtsim_data.sites.world_site_map.get(&world_site_id).copied() else {
+        return Vec::new();
+    };
+    let Some(rtsim_site) = rtsim_data.sites.get(rtsim_site_id) else {
+        return Vec::new();
+    };
+
+    let mut professions = rtsim_site
+        .population
+        .iter()
+        .filter_map(|npc_id| {
+            let npc = rtsim_data.npcs.get(*npc_id)?;
+            npc.profession().map(|profession| (npc.uid, profession))
+        })
+        .collect::<Vec<_>>();
+    professions.sort_by_key(|(uid, _)| *uid);
+    professions
+        .into_iter()
+        .map(|(_, profession)| profession)
+        .collect()
+}
+
+fn fallback_settlement_profession_roster(site: &veloren_world::site::Site) -> Vec<Profession> {
+    let town_plots = site.plots().len();
+    let guards = town_plots / 4;
+    let adventurers = town_plots / 5;
+    let merchants = town_plots / 6 + 1;
+    let town_professions = town_plots.saturating_sub(guards + adventurers);
+    rtsim_site_roster(guards, adventurers, merchants, town_professions)
 }
 
 fn rtsim_site_roster(

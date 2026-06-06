@@ -83,6 +83,10 @@ Current milestone:
   markers from original settlement plots using an rtsim-style profession roster
   plus original service plots, so starter towns no longer render as empty
   terrain plus only waypoint supplements;
+- route site NPC/trader marker generation through generated rtsim site data and
+  prefer actual home-site population professions when present, falling back to
+  generated settlement demand only while the initial rtsim population is still
+  pending spawn;
 - include those rtsim-style site NPC/trader/market markers in nearest-target
   reporting and `E`/`Enter` interaction previews, including market-board trade
   preview status text;
