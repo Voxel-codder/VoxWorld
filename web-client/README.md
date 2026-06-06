@@ -32,7 +32,7 @@ From the repository root:
 
 ```powershell
 rustup target add wasm32-unknown-unknown
-cargo install wasm-bindgen-cli
+cargo install wasm-bindgen-cli --version 0.2.106 --locked
 .\web-client\scripts\build-wasm.ps1
 python -m http.server 8080 --directory web-client\web
 ```
