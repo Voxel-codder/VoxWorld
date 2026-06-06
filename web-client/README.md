@@ -15,7 +15,7 @@ platform work can land without disturbing the production server or native client
 - Mouse and touch look-direction forwarding from the canvas
 - Mouse primary and secondary action forwarding from the canvas
 - On-screen touch movement and action controls for mobile browsers
-- Snapshot-driven canvas view for the player, nearby entities, health, and energy
+- Snapshot-driven canvas view for the player, nearby entities, health, entity health, and energy
 - Browser-persisted guest name passed through `/play?name=...`
 - Browser chat input and session event log over the `/play` transport
 

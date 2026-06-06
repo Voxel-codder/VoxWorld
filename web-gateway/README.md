@@ -54,5 +54,6 @@ It can also forward basic gameplay actions:
 
 The gateway responds with stage, snapshot, event, and error messages. Snapshots
 currently include username, in-game state, position, health, energy, online
-player names, character count, and up to 96 nearby entity positions.
+player names, character count, and up to 96 nearby entity positions with
+available health.
 `/api/status` also reports active and maximum browser play sessions.

@@ -102,6 +102,7 @@ struct SnapshotEntity {
     is_self: bool,
     position: [f32; 3],
     distance: f32,
+    health: Option<PlayerStat>,
 }
 
 #[derive(Debug, Serialize)]
@@ -401,13 +402,15 @@ fn snapshot_entities(client: &Client) -> Vec<SnapshotEntity> {
     };
     let self_uid = client.uid();
     let ecs = client.state().ecs();
+    let ecs_entities = ecs.entities();
     let positions = ecs.read_storage::<comp::Pos>();
+    let healths = ecs.read_storage::<comp::Health>();
     let uids = ecs.read_storage::<Uid>();
     let players = client.player_list();
 
-    let mut entities = (&uids, &positions)
+    let mut entities = (&ecs_entities, &uids, &positions)
         .join()
-        .filter_map(|(uid, position)| {
+        .filter_map(|(entity, uid, position)| {
             let delta = position.0 - origin;
             let distance = delta.magnitude();
 
@@ -423,6 +426,11 @@ fn snapshot_entities(client: &Client) -> Vec<SnapshotEntity> {
                 is_self: self_uid == Some(*uid),
                 position: [position.0.x, position.0.y, position.0.z],
                 distance,
+                health: healths.get(entity).map(|health| PlayerStat {
+                    current: health.current(),
+                    maximum: health.maximum(),
+                    fraction: health.fraction().clamp(0.0, 1.0),
+                }),
             })
         })
         .collect::<Vec<_>>();

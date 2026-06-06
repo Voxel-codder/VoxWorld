@@ -52,6 +52,7 @@ struct EntityView {
     kind: String,
     is_self: bool,
     position: [f64; 3],
+    health: Option<StatView>,
 }
 
 #[derive(Clone, Copy)]
@@ -280,6 +281,7 @@ fn parse_snapshot(value: &JsValue) -> Option<SnapshotView> {
                         kind: string_property(&entity, "kind").unwrap_or_else(|| "entity".into()),
                         is_self: bool_property(&entity, "is_self"),
                         position: array3_property(&entity, "position")?,
+                        health: stat_property(&entity, "health"),
                     })
                 })
                 .collect()
@@ -879,6 +881,12 @@ fn draw_snapshot(
         let _ = context.arc(x, y, radius, 0.0, std::f64::consts::TAU);
         context.fill();
 
+        if !entity.is_self
+            && let Some(health) = &entity.health
+        {
+            draw_entity_health_bar(context, x, y - radius - 10.0, health);
+        }
+
         if entity.is_self || entity.kind == "player" {
             if let Some(name) = &entity.name {
                 context.set_fill_style(&JsValue::from_str("rgba(231, 247, 255, 0.82)"));
@@ -959,6 +967,23 @@ fn draw_stat_bar(
         x + width + 10.0,
         y + 10.0,
     );
+}
+
+#[allow(deprecated)]
+fn draw_entity_health_bar(
+    context: &CanvasRenderingContext2d,
+    center_x: f64,
+    y: f64,
+    health: &StatView,
+) {
+    let width = 34.0;
+    let height = 4.0;
+    let x = center_x - width * 0.5;
+
+    context.set_fill_style(&JsValue::from_str("rgba(0, 0, 0, 0.48)"));
+    context.fill_rect(x, y, width, height);
+    context.set_fill_style(&JsValue::from_str("#d95f5f"));
+    context.fill_rect(x, y, width * health.fraction, height);
 }
 
 fn resize_canvas(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
