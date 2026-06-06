@@ -8,19 +8,21 @@ use std::{
 use common::{
     ViewDistances,
     comp::{
-        ControllerInputs,
+        self, ControllerInputs,
         body::humanoid::{Body, BodyType, Species},
     },
+    uid::Uid,
     util::dir::Dir,
 };
 use serde::{Deserialize, Serialize};
 use tokio::{runtime::Runtime, sync::mpsc::UnboundedSender};
 use tracing::{error, warn};
 use vek::{Vec2, Vec3};
-use veloren_client::{Client, ClientType, Event, addr::ConnectionArgs};
+use veloren_client::{Client, ClientType, Event, Join, WorldExt, addr::ConnectionArgs};
 
 const TICK: Duration = Duration::from_millis(50);
 const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(250);
+const SNAPSHOT_ENTITY_LIMIT: usize = 96;
 const WEB_VIEW_DISTANCE: ViewDistances = ViewDistances {
     terrain: 5,
     entity: 5,
@@ -54,6 +56,7 @@ enum SessionMessage {
         position: Option<[f32; 3]>,
         players_online: Vec<String>,
         character_count: usize,
+        entities: Vec<SnapshotEntity>,
     },
     Event {
         message: String,
@@ -61,6 +64,16 @@ enum SessionMessage {
     Error {
         message: String,
     },
+}
+
+#[derive(Debug, Serialize)]
+struct SnapshotEntity {
+    uid: String,
+    name: Option<String>,
+    kind: &'static str,
+    is_self: bool,
+    position: [f32; 3],
+    distance: f32,
 }
 
 pub struct PlaySession {
@@ -286,6 +299,7 @@ fn send_snapshot(
         .position()
         .map(|position| [position.x, position.y, position.z]);
     let players_online = client.players().map(str::to_owned).collect();
+    let entities = snapshot_entities(client);
 
     send_json(outbound, SessionMessage::Snapshot {
         username: username.to_owned(),
@@ -293,7 +307,45 @@ fn send_snapshot(
         position,
         players_online,
         character_count: client.character_list().characters.len(),
+        entities,
     });
+}
+
+fn snapshot_entities(client: &Client) -> Vec<SnapshotEntity> {
+    let Some(origin) = client.position() else {
+        return Vec::new();
+    };
+    let self_uid = client.uid();
+    let ecs = client.state().ecs();
+    let positions = ecs.read_storage::<comp::Pos>();
+    let uids = ecs.read_storage::<Uid>();
+    let players = client.player_list();
+
+    let mut entities = (&uids, &positions)
+        .join()
+        .filter_map(|(uid, position)| {
+            let delta = position.0 - origin;
+            let distance = delta.magnitude();
+
+            if !distance.is_finite() || distance > 512.0 {
+                return None;
+            }
+
+            let player = players.get(uid);
+            Some(SnapshotEntity {
+                uid: uid.to_string(),
+                name: player.map(|player| player.player_alias.clone()),
+                kind: if player.is_some() { "player" } else { "entity" },
+                is_self: self_uid == Some(*uid),
+                position: [position.0.x, position.0.y, position.0.z],
+                distance,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    entities.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+    entities.truncate(SNAPSHOT_ENTITY_LIMIT);
+    entities
 }
 
 fn default_body() -> Body {

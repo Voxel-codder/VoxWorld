@@ -12,6 +12,7 @@ platform work can land without disturbing the production server or native client
 - Static web page that can be hosted by any HTTP server
 - Same-origin `/play` connection default for Railway and local gateway hosting
 - Keyboard input forwarding for WASD, Space, and Shift
+- Snapshot-driven canvas view for the player and nearby entities
 
 ## Build
 
@@ -44,8 +45,7 @@ http://localhost:14080
 
 ## Porting Roadmap
 
-1. Expand `/play` snapshots from position/player metadata to nearby entities.
-2. Render the headless session snapshots on the browser canvas.
-3. Add browser-side character naming and basic account/session UX.
-4. Replace the canvas placeholder with the real renderer path.
-5. Add asset manifest loading, compression, caching, and progressive download.
+1. Expand `/play` snapshots from dot-level entity positions to richer entity state.
+2. Add browser-side character naming and basic account/session UX.
+3. Replace the canvas snapshot view with the real renderer path.
+4. Add asset manifest loading, compression, caching, and progressive download.

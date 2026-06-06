@@ -11,6 +11,7 @@ use web_sys::{
 thread_local! {
     static SOCKET: RefCell<Option<WebSocket>> = const { RefCell::new(None) };
     static INPUT: RefCell<InputState> = const { RefCell::new(InputState::new()) };
+    static LAST_SNAPSHOT: RefCell<Option<SnapshotView>> = const { RefCell::new(None) };
 }
 
 #[derive(Clone, Copy)]
@@ -21,6 +22,23 @@ struct InputState {
     right: bool,
     up: bool,
     down: bool,
+}
+
+#[derive(Clone)]
+struct SnapshotView {
+    username: String,
+    in_game: bool,
+    position: Option<[f64; 3]>,
+    players_online: u32,
+    entities: Vec<EntityView>,
+}
+
+#[derive(Clone)]
+struct EntityView {
+    name: Option<String>,
+    kind: String,
+    is_self: bool,
+    position: [f64; 3],
 }
 
 impl InputState {
@@ -161,6 +179,12 @@ fn summarize_server_message(data: &JsValue) -> String {
             format!("Session stage: {stage}")
         },
         Some("snapshot") => {
+            if let Some(snapshot) = parse_snapshot(&value) {
+                LAST_SNAPSHOT.with(|last| {
+                    *last.borrow_mut() = Some(snapshot.clone());
+                });
+            }
+
             let username = string_property(&value, "username").unwrap_or_else(|| "web".to_owned());
             let in_game = bool_property(&value, "in_game");
             let players = Reflect::get(&value, &JsValue::from_str("players_online"))
@@ -181,6 +205,54 @@ fn summarize_server_message(data: &JsValue) -> String {
         },
         _ => "Session message received".to_owned(),
     }
+}
+
+fn parse_snapshot(value: &JsValue) -> Option<SnapshotView> {
+    let username = string_property(value, "username").unwrap_or_else(|| "web".to_owned());
+    let in_game = bool_property(value, "in_game");
+    let players_online = Reflect::get(value, &JsValue::from_str("players_online"))
+        .ok()
+        .and_then(|players| players.dyn_into::<js_sys::Array>().ok())
+        .map_or(0, |players| players.length());
+    let position = array3_property(value, "position");
+    let entities = Reflect::get(value, &JsValue::from_str("entities"))
+        .ok()
+        .and_then(|entities| entities.dyn_into::<js_sys::Array>().ok())
+        .map(|entities| {
+            entities
+                .iter()
+                .filter_map(|entity| {
+                    Some(EntityView {
+                        name: string_property(&entity, "name"),
+                        kind: string_property(&entity, "kind").unwrap_or_else(|| "entity".into()),
+                        is_self: bool_property(&entity, "is_self"),
+                        position: array3_property(&entity, "position")?,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(SnapshotView {
+        username,
+        in_game,
+        position,
+        players_online,
+        entities,
+    })
+}
+
+fn array3_property(value: &JsValue, key: &str) -> Option<[f64; 3]> {
+    let array = Reflect::get(value, &JsValue::from_str(key))
+        .ok()?
+        .dyn_into::<js_sys::Array>()
+        .ok()?;
+
+    Some([
+        array.get(0).as_f64()?,
+        array.get(1).as_f64()?,
+        array.get(2).as_f64()?,
+    ])
 }
 
 fn string_property(value: &JsValue, key: &str) -> Option<String> {
@@ -272,7 +344,7 @@ fn start_render_loop(
     let animation_window = window.clone();
 
     *frame_ref.borrow_mut() = Some(Closure::<dyn FnMut(f64)>::new(move |time| {
-        draw_placeholder(&context, &canvas, time);
+        draw_world(&context, &canvas, time);
 
         if let Some(callback) = frame.borrow().as_ref() {
             let _ = animation_window.request_animation_frame(callback.as_ref().unchecked_ref());
@@ -287,9 +359,23 @@ fn start_render_loop(
 }
 
 #[allow(deprecated)]
-fn draw_placeholder(context: &CanvasRenderingContext2d, canvas: &HtmlCanvasElement, time: f64) {
+fn draw_world(context: &CanvasRenderingContext2d, canvas: &HtmlCanvasElement, time: f64) {
     let width = f64::from(canvas.width());
     let height = f64::from(canvas.height());
+    let snapshot = LAST_SNAPSHOT.with(|last| last.borrow().clone());
+
+    if let Some(snapshot) = snapshot
+        && snapshot.position.is_some()
+    {
+        draw_snapshot(context, width, height, &snapshot);
+        return;
+    }
+
+    draw_placeholder(context, width, height, time);
+}
+
+#[allow(deprecated)]
+fn draw_placeholder(context: &CanvasRenderingContext2d, width: f64, height: f64, time: f64) {
     let cell = 28.0;
     let pulse = ((time / 700.0).sin() + 1.0) * 0.5;
 
@@ -325,6 +411,89 @@ fn draw_placeholder(context: &CanvasRenderingContext2d, canvas: &HtmlCanvasEleme
         "Headless session bridge online. Use WASD, Space, Shift.",
         32.0,
         76.0,
+    );
+}
+
+#[allow(deprecated)]
+fn draw_snapshot(
+    context: &CanvasRenderingContext2d,
+    width: f64,
+    height: f64,
+    snapshot: &SnapshotView,
+) {
+    let [origin_x, origin_y, origin_z] = snapshot.position.unwrap_or([0.0, 0.0, 0.0]);
+    let center_x = width * 0.5;
+    let center_y = height * 0.5;
+    let scale = 4.0;
+
+    context.set_fill_style(&JsValue::from_str("#07111f"));
+    context.fill_rect(0.0, 0.0, width, height);
+
+    context.set_stroke_style(&JsValue::from_str("rgba(156, 220, 205, 0.16)"));
+    context.set_line_width(1.0);
+    for i in -8..=8 {
+        let offset = f64::from(i) * 64.0 * scale;
+        context.begin_path();
+        context.move_to(center_x + offset, 0.0);
+        context.line_to(center_x + offset, height);
+        context.stroke();
+
+        context.begin_path();
+        context.move_to(0.0, center_y + offset);
+        context.line_to(width, center_y + offset);
+        context.stroke();
+    }
+
+    for entity in &snapshot.entities {
+        let dx = (entity.position[0] - origin_x) * scale;
+        let dy = (entity.position[1] - origin_y) * scale;
+        let x = center_x + dx;
+        let y = center_y - dy;
+
+        if x < -20.0 || x > width + 20.0 || y < -20.0 || y > height + 20.0 {
+            continue;
+        }
+
+        let (radius, color) = if entity.is_self {
+            (8.0, "#e7f7ff")
+        } else if entity.kind == "player" {
+            (6.0, "#3ab49b")
+        } else {
+            (4.0, "#d8b15f")
+        };
+
+        context.begin_path();
+        context.set_fill_style(&JsValue::from_str(color));
+        let _ = context.arc(x, y, radius, 0.0, std::f64::consts::TAU);
+        context.fill();
+
+        if entity.is_self || entity.kind == "player" {
+            if let Some(name) = &entity.name {
+                context.set_fill_style(&JsValue::from_str("rgba(231, 247, 255, 0.82)"));
+                context.set_font("12px system-ui, sans-serif");
+                let _ = context.fill_text(name, x + 10.0, y - 10.0);
+            }
+        }
+    }
+
+    context.set_fill_style(&JsValue::from_str("#e7f7ff"));
+    context.set_font("700 20px system-ui, sans-serif");
+    let state = if snapshot.in_game {
+        "in game"
+    } else {
+        "joining"
+    };
+    let _ = context.fill_text(&format!("{} - {state}", snapshot.username), 28.0, 38.0);
+
+    context.set_fill_style(&JsValue::from_str("rgba(231, 247, 255, 0.72)"));
+    context.set_font("13px system-ui, sans-serif");
+    let _ = context.fill_text(
+        &format!(
+            "{} online | {:.1}, {:.1}, {:.1}",
+            snapshot.players_online, origin_x, origin_y, origin_z
+        ),
+        28.0,
+        62.0,
     );
 }
 
