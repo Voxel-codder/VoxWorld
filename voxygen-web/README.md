@@ -26,8 +26,13 @@ Current milestone:
 - track a browser-side player block position with continuous keyboard movement,
   update the camera every animation frame, and upload a regenerated terrain
   patch when the player crosses a chunk boundary;
+- frame the WebGPU scene with a player-following third-person camera instead
+  of the earlier far-away terrain-preview view;
 - convert original `ChunkSupplement.entity_spawns` into visible 3D markers and
   render them alongside a browser-side player marker;
+- preserve original `EntityInfo.body` categories in the web preview and render
+  body-aware temporary silhouettes for humanoid, quadruped, flyer, fish, large,
+  and object entities;
 - keep this as the stable place for future Voxygen renderer/HUD migration;
 - avoid extending the temporary 2D canvas client as if it were the final game.
 
@@ -35,8 +40,8 @@ Next milestones:
 
 - replace the temporary block-face mesh with Voxygen's real greedy terrain mesh
   and atlas/material pipeline;
-- replace entity and player marker boxes with Voxygen body meshes, loadouts, and
-  animation state;
+- replace entity and player temporary silhouettes with Voxygen body meshes,
+  loadouts, and animation state;
 - replace the regenerated 3x3 patch with incremental chunk streaming around the
   live player position;
 - attach player/session state so the scene follows the live character instead

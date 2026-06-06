@@ -38,6 +38,7 @@ pub struct OriginalWorldMesh {
     pub chunk_dimensions: (u32, u32),
     pub center_chunk_pos: (i32, i32),
     pub chunk_patch: (u32, u32),
+    pub vertical_origin: f32,
     pub generated_chunks: usize,
     pub terrain_faces: usize,
     pub filled_blocks: usize,
@@ -54,6 +55,17 @@ pub struct OriginalEntityMarker {
     pub radius: f32,
     pub height: f32,
     pub color: [f32; 3],
+    pub shape: OriginalEntityMarkerShape,
+}
+
+#[derive(Clone, Copy)]
+pub enum OriginalEntityMarkerShape {
+    Humanoid,
+    Quadruped,
+    Flyer,
+    Fish,
+    Large,
+    Object,
 }
 
 impl OriginalWorldPreview {
@@ -106,7 +118,11 @@ impl OriginalWorldPreview {
     }
 
     pub fn initial_player_wpos(&self) -> Vec2<f32> {
-        chunk_center_wpos(self.initial_center_chunk_pos())
+        let rect_size = TerrainChunkSize::RECT_SIZE.as_::<f32>();
+        self.clamp_player_wpos(
+            chunk_center_wpos(self.initial_center_chunk_pos())
+                + Vec2::new(rect_size.x * 0.28, -rect_size.y * 0.22),
+        )
     }
 
     pub fn center_chunk_for_wpos(&self, wpos: Vec2<f32>) -> Vec2<i32> {
@@ -141,12 +157,15 @@ impl OriginalWorldPreview {
         &self,
         player_wpos: Vec2<f32>,
         center_chunk_pos: Vec2<i32>,
+        vertical_origin: f32,
     ) -> [f32; 3] {
         let center = chunk_center_wpos(center_chunk_pos);
         let delta = player_wpos - center;
+        let sample_wpos = Vec2::new(player_wpos.x.floor() as i32, player_wpos.y.floor() as i32);
+        let surface_alt = self.world.sim().get_surface_alt_approx(sample_wpos);
         [
             delta.x * TERRAIN_HORIZONTAL_SCALE,
-            0.0,
+            (surface_alt - vertical_origin) * 0.28 + 0.25,
             delta.y * TERRAIN_HORIZONTAL_SCALE,
         ]
     }
@@ -299,6 +318,7 @@ fn mesh_from_terrain_chunks(
         chunk_dimensions: (dimensions.x, dimensions.y),
         center_chunk_pos: (center_chunk_pos.x, center_chunk_pos.y),
         chunk_patch: (patch_side, patch_side),
+        vertical_origin,
         generated_chunks: chunks.len(),
         terrain_faces: builder.face_count,
         filled_blocks,
@@ -353,30 +373,38 @@ fn entity_marker(
         (entity.pos.z - vertical_origin) * 0.28 + 0.25,
         (entity.pos.y - center.y) * TERRAIN_HORIZONTAL_SCALE,
     ];
-    let (radius, height) = entity_marker_size(&entity.body, entity.scale);
+    let (radius, height, shape) = entity_marker_style(&entity.body, entity.scale);
     OriginalEntityMarker {
         render_pos,
         radius,
         height,
         color: entity_marker_color(entity),
+        shape,
     }
 }
 
-fn entity_marker_size(body: &Body, scale: f32) -> (f32, f32) {
-    let (radius, height) = match body {
-        Body::Humanoid(_) => (0.34, 1.45),
-        Body::QuadrupedSmall(_) | Body::BipedSmall(_) | Body::FishSmall(_) => (0.28, 0.82),
-        Body::QuadrupedMedium(_) | Body::QuadrupedLow(_) | Body::Theropod(_) => (0.48, 1.05),
-        Body::BipedLarge(_) | Body::Golem(_) => (0.68, 1.85),
-        Body::Dragon(_) => (1.15, 2.25),
-        Body::BirdMedium(_) | Body::BirdLarge(_) => (0.42, 0.9),
-        Body::FishMedium(_) | Body::Crustacean(_) | Body::Arthropod(_) => (0.34, 0.72),
-        Body::Object(_) | Body::Item(_) => (0.24, 0.48),
-        Body::Ship(_) => (1.35, 1.1),
-        Body::Plugin(_) => (0.42, 1.0),
+fn entity_marker_style(body: &Body, scale: f32) -> (f32, f32, OriginalEntityMarkerShape) {
+    use OriginalEntityMarkerShape::{Fish, Flyer, Humanoid, Large, Object, Quadruped};
+
+    let (radius, height, shape) = match body {
+        Body::Humanoid(_) => (0.34, 1.45, Humanoid),
+        Body::BipedSmall(_) => (0.28, 0.82, Humanoid),
+        Body::BipedLarge(_) => (0.68, 1.85, Humanoid),
+        Body::QuadrupedSmall(_) => (0.28, 0.82, Quadruped),
+        Body::QuadrupedMedium(_) | Body::QuadrupedLow(_) | Body::Theropod(_) => {
+            (0.48, 1.05, Quadruped)
+        },
+        Body::Crustacean(_) | Body::Arthropod(_) => (0.34, 0.72, Quadruped),
+        Body::BirdMedium(_) | Body::BirdLarge(_) => (0.42, 0.9, Flyer),
+        Body::Dragon(_) => (1.15, 2.25, Flyer),
+        Body::FishSmall(_) => (0.28, 0.82, Fish),
+        Body::FishMedium(_) => (0.34, 0.72, Fish),
+        Body::Golem(_) => (0.68, 1.85, Large),
+        Body::Ship(_) => (1.35, 1.1, Large),
+        Body::Object(_) | Body::Item(_) | Body::Plugin(_) => (0.24, 0.48, Object),
     };
     let scale = scale.clamp(0.4, 3.0);
-    (radius * scale, height * scale)
+    (radius * scale, height * scale, shape)
 }
 
 fn entity_marker_color(entity: &EntityInfo) -> [f32; 3] {

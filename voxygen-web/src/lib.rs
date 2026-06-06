@@ -7,7 +7,8 @@ use vek::Vec2;
 use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
 use web_sys::{Document, HtmlCanvasElement, KeyboardEvent, Window};
 use world_preview::{
-    FLOATS_PER_VERTEX, OriginalEntityMarker, OriginalWorldMesh, OriginalWorldPreview,
+    FLOATS_PER_VERTEX, OriginalEntityMarker, OriginalEntityMarkerShape, OriginalWorldMesh,
+    OriginalWorldPreview,
 };
 
 const CANVAS_ID: &str = "voxworld-canvas";
@@ -16,6 +17,7 @@ const STATUS_ID: &str = "voxworld-status";
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 const PLAYER_SPEED_BLOCKS_PER_SECOND: f32 = 14.0;
 const MAX_FRAME_DELTA_SECONDS: f32 = 0.05;
+const THIRD_PERSON_CAMERA_DISTANCE: f32 = 34.0;
 const TERRAIN_SHADER: &str = r#"
 struct Camera {
     view_proj: mat4x4<f32>,
@@ -225,7 +227,11 @@ impl VoxygenWebClient {
 
         let depth_view = create_depth_view(&device, &config);
         let aspect = width as f32 / height.max(1) as f32;
-        let player_render_pos = world_preview.player_render_position(player_wpos, center_chunk_pos);
+        let player_render_pos = world_preview.player_render_position(
+            player_wpos,
+            center_chunk_pos,
+            world_mesh.vertical_origin,
+        );
         let camera_matrix = camera_view_projection(aspect, &world_mesh, player_render_pos);
         let camera_buffer = create_buffer_with_data(
             &device,
@@ -276,8 +282,11 @@ impl VoxygenWebClient {
             .map_err(|_| "terrain index count overflowed u32".to_owned())?;
         let (entity_marker_vertex_buffer, entity_marker_index_buffer, entity_marker_index_count) =
             create_marker_buffers(&device, &world_mesh.entity_markers, "Entity");
-        let player_marker =
-            player_marker(world_preview.player_render_position(player_wpos, center_chunk_pos));
+        let player_marker = player_marker(world_preview.player_render_position(
+            player_wpos,
+            center_chunk_pos,
+            world_mesh.vertical_origin,
+        ));
         let (player_marker_vertex_buffer, player_marker_index_buffer, player_marker_index_count) =
             create_marker_buffers(&device, &[player_marker], "Player");
 
@@ -504,9 +513,11 @@ impl VoxygenWebClient {
     }
 
     fn update_camera(&self) {
-        let player_render_pos = self
-            .world_preview
-            .player_render_position(self.player.wpos, self.player.center_chunk_pos);
+        let player_render_pos = self.world_preview.player_render_position(
+            self.player.wpos,
+            self.player.center_chunk_pos,
+            self.world_mesh.vertical_origin,
+        );
         let camera_matrix =
             camera_view_projection(self.player.aspect, &self.world_mesh, player_render_pos);
         self.queue
@@ -514,9 +525,11 @@ impl VoxygenWebClient {
     }
 
     fn update_player_marker(&mut self) {
-        let player_render_pos = self
-            .world_preview
-            .player_render_position(self.player.wpos, self.player.center_chunk_pos);
+        let player_render_pos = self.world_preview.player_render_position(
+            self.player.wpos,
+            self.player.center_chunk_pos,
+            self.world_mesh.vertical_origin,
+        );
         let marker = player_marker(player_render_pos);
         let (vertex_buffer, index_buffer, index_count) =
             create_marker_buffers(&self.device, &[marker], "Player");
@@ -694,10 +707,11 @@ fn marker_buffer_label(prefix: &'static str, kind: &'static str) -> &'static str
 
 fn player_marker(render_pos: [f32; 3]) -> OriginalEntityMarker {
     OriginalEntityMarker {
-        render_pos: [render_pos[0], render_pos[1] + 2.2, render_pos[2]],
-        radius: 0.62,
-        height: 2.25,
+        render_pos: [render_pos[0], render_pos[1] + 0.18, render_pos[2]],
+        radius: 0.78,
+        height: 2.55,
         color: [1.0, 0.96, 0.22],
+        shape: OriginalEntityMarkerShape::Humanoid,
     }
 }
 
@@ -705,25 +719,224 @@ fn marker_mesh(markers: &[OriginalEntityMarker]) -> (Vec<f32>, Vec<u32>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     for marker in markers {
-        add_marker_box(&mut vertices, &mut indices, *marker);
+        add_marker_shape(&mut vertices, &mut indices, *marker);
     }
     (vertices, indices)
 }
 
-fn add_marker_box(vertices: &mut Vec<f32>, indices: &mut Vec<u32>, marker: OriginalEntityMarker) {
+fn add_marker_shape(vertices: &mut Vec<f32>, indices: &mut Vec<u32>, marker: OriginalEntityMarker) {
+    match marker.shape {
+        OriginalEntityMarkerShape::Humanoid => add_humanoid_marker(vertices, indices, marker),
+        OriginalEntityMarkerShape::Quadruped => add_quadruped_marker(vertices, indices, marker),
+        OriginalEntityMarkerShape::Flyer => add_flyer_marker(vertices, indices, marker),
+        OriginalEntityMarkerShape::Fish => add_fish_marker(vertices, indices, marker),
+        OriginalEntityMarkerShape::Large => add_large_marker(vertices, indices, marker),
+        OriginalEntityMarkerShape::Object => add_object_marker(vertices, indices, marker),
+    }
+}
+
+fn add_humanoid_marker(
+    vertices: &mut Vec<f32>,
+    indices: &mut Vec<u32>,
+    marker: OriginalEntityMarker,
+) {
     let [x, y, z] = marker.render_pos;
     let r = marker.radius;
-    let y0 = y;
-    let y1 = y + marker.height;
+    let h = marker.height;
+    add_marker_cuboid(
+        vertices,
+        indices,
+        [x, y + h * 0.38, z],
+        [r * 0.48, h * 0.30, r * 0.34],
+        marker.color,
+    );
+    add_marker_cuboid(
+        vertices,
+        indices,
+        [x, y + h * 0.78, z],
+        [r * 0.34, h * 0.13, r * 0.34],
+        tint_marker_color(marker.color, 1.08),
+    );
+    for x_offset in [-r * 0.23, r * 0.23] {
+        add_marker_cuboid(
+            vertices,
+            indices,
+            [x + x_offset, y + h * 0.13, z],
+            [r * 0.13, h * 0.17, r * 0.14],
+            tint_marker_color(marker.color, 0.86),
+        );
+    }
+    for x_offset in [-r * 0.60, r * 0.60] {
+        add_marker_cuboid(
+            vertices,
+            indices,
+            [x + x_offset, y + h * 0.42, z],
+            [r * 0.11, h * 0.24, r * 0.11],
+            tint_marker_color(marker.color, 0.92),
+        );
+    }
+}
+
+fn add_quadruped_marker(
+    vertices: &mut Vec<f32>,
+    indices: &mut Vec<u32>,
+    marker: OriginalEntityMarker,
+) {
+    let [x, y, z] = marker.render_pos;
+    let r = marker.radius;
+    let h = marker.height;
+    add_marker_cuboid(
+        vertices,
+        indices,
+        [x, y + h * 0.43, z],
+        [r * 1.12, h * 0.23, r * 0.46],
+        marker.color,
+    );
+    add_marker_cuboid(
+        vertices,
+        indices,
+        [x + r * 1.28, y + h * 0.55, z],
+        [r * 0.36, h * 0.18, r * 0.32],
+        tint_marker_color(marker.color, 1.06),
+    );
+    add_marker_cuboid(
+        vertices,
+        indices,
+        [x - r * 1.34, y + h * 0.48, z],
+        [r * 0.22, h * 0.06, r * 0.16],
+        tint_marker_color(marker.color, 0.78),
+    );
+    for x_offset in [-r * 0.70, r * 0.70] {
+        for z_offset in [-r * 0.30, r * 0.30] {
+            add_marker_cuboid(
+                vertices,
+                indices,
+                [x + x_offset, y + h * 0.15, z + z_offset],
+                [r * 0.10, h * 0.16, r * 0.09],
+                tint_marker_color(marker.color, 0.84),
+            );
+        }
+    }
+}
+
+fn add_flyer_marker(vertices: &mut Vec<f32>, indices: &mut Vec<u32>, marker: OriginalEntityMarker) {
+    let [x, y, z] = marker.render_pos;
+    let r = marker.radius;
+    let h = marker.height;
+    add_marker_cuboid(
+        vertices,
+        indices,
+        [x, y + h * 0.50, z],
+        [r * 0.62, h * 0.20, r * 0.36],
+        marker.color,
+    );
+    for z_offset in [-r * 0.98, r * 0.98] {
+        add_marker_cuboid(
+            vertices,
+            indices,
+            [x - r * 0.10, y + h * 0.52, z + z_offset],
+            [r * 0.44, h * 0.05, r * 0.70],
+            tint_marker_color(marker.color, 0.90),
+        );
+    }
+    add_marker_cuboid(
+        vertices,
+        indices,
+        [x + r * 0.78, y + h * 0.58, z],
+        [r * 0.28, h * 0.12, r * 0.24],
+        tint_marker_color(marker.color, 1.08),
+    );
+}
+
+fn add_fish_marker(vertices: &mut Vec<f32>, indices: &mut Vec<u32>, marker: OriginalEntityMarker) {
+    let [x, y, z] = marker.render_pos;
+    let r = marker.radius;
+    let h = marker.height;
+    add_marker_cuboid(
+        vertices,
+        indices,
+        [x, y + h * 0.46, z],
+        [r * 1.02, h * 0.20, r * 0.32],
+        marker.color,
+    );
+    add_marker_cuboid(
+        vertices,
+        indices,
+        [x - r * 1.16, y + h * 0.46, z],
+        [r * 0.20, h * 0.30, r * 0.11],
+        tint_marker_color(marker.color, 0.92),
+    );
+    add_marker_cuboid(
+        vertices,
+        indices,
+        [x + r * 0.95, y + h * 0.48, z],
+        [r * 0.18, h * 0.13, r * 0.20],
+        tint_marker_color(marker.color, 1.06),
+    );
+}
+
+fn add_large_marker(vertices: &mut Vec<f32>, indices: &mut Vec<u32>, marker: OriginalEntityMarker) {
+    let [x, y, z] = marker.render_pos;
+    let r = marker.radius;
+    let h = marker.height;
+    add_marker_cuboid(
+        vertices,
+        indices,
+        [x, y + h * 0.38, z],
+        [r * 0.78, h * 0.34, r * 0.62],
+        marker.color,
+    );
+    add_marker_cuboid(
+        vertices,
+        indices,
+        [x, y + h * 0.82, z],
+        [r * 0.48, h * 0.15, r * 0.45],
+        tint_marker_color(marker.color, 1.05),
+    );
+    for x_offset in [-r * 0.52, r * 0.52] {
+        add_marker_cuboid(
+            vertices,
+            indices,
+            [x + x_offset, y + h * 0.12, z],
+            [r * 0.16, h * 0.18, r * 0.18],
+            tint_marker_color(marker.color, 0.84),
+        );
+    }
+}
+
+fn add_object_marker(
+    vertices: &mut Vec<f32>,
+    indices: &mut Vec<u32>,
+    marker: OriginalEntityMarker,
+) {
+    let [x, y, z] = marker.render_pos;
+    add_marker_cuboid(
+        vertices,
+        indices,
+        [x, y + marker.height * 0.5, z],
+        [marker.radius, marker.height * 0.5, marker.radius],
+        marker.color,
+    );
+}
+
+fn add_marker_cuboid(
+    vertices: &mut Vec<f32>,
+    indices: &mut Vec<u32>,
+    center: [f32; 3],
+    half_extents: [f32; 3],
+    color: [f32; 3],
+) {
+    let [x, y, z] = center;
+    let [hx, hy, hz] = half_extents.map(|extent| extent.max(0.01));
     let corners = [
-        [x - r, y0, z - r],
-        [x + r, y0, z - r],
-        [x + r, y0, z + r],
-        [x - r, y0, z + r],
-        [x - r, y1, z - r],
-        [x + r, y1, z - r],
-        [x + r, y1, z + r],
-        [x - r, y1, z + r],
+        [x - hx, y - hy, z - hz],
+        [x + hx, y - hy, z - hz],
+        [x + hx, y - hy, z + hz],
+        [x - hx, y - hy, z + hz],
+        [x - hx, y + hy, z - hz],
+        [x + hx, y + hy, z - hz],
+        [x + hx, y + hy, z + hz],
+        [x - hx, y + hy, z + hz],
     ];
     const FACES: [[usize; 4]; 6] = [
         [0, 1, 2, 3],
@@ -736,13 +949,17 @@ fn add_marker_box(vertices: &mut Vec<f32>, indices: &mut Vec<u32>, marker: Origi
 
     for (face_index, face) in FACES.iter().enumerate() {
         let base = (vertices.len() / FLOATS_PER_VERTEX) as u32;
-        let color = shade_marker_color(marker.color, face_index);
+        let color = shade_marker_color(color, face_index);
         for corner_index in face {
             let [vx, vy, vz] = corners[*corner_index];
             vertices.extend_from_slice(&[vx, vy, vz, color[0], color[1], color[2]]);
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
+}
+
+fn tint_marker_color(color: [f32; 3], factor: f32) -> [f32; 3] {
+    color.map(|channel| (channel * factor).min(1.0))
 }
 
 fn shade_marker_color(color: [f32; 3], face_index: usize) -> [f32; 3] {
@@ -757,24 +974,22 @@ fn shade_marker_color(color: [f32; 3], face_index: usize) -> [f32; 3] {
 
 fn camera_view_projection(
     aspect: f32,
-    world_mesh: &OriginalWorldMesh,
+    _world_mesh: &OriginalWorldMesh,
     player_render_pos: [f32; 3],
 ) -> [f32; 16] {
-    let patch_width = world_mesh.chunk_patch.0.max(world_mesh.chunk_patch.1) as f32;
-    let eye_distance = (patch_width * 28.0).max(42.0);
     let target = [
         player_render_pos[0],
-        player_render_pos[1] + 4.0,
+        player_render_pos[1] + 3.6,
         player_render_pos[2],
     ];
     let eye = [
-        target[0] + eye_distance * 0.72,
-        target[1] + eye_distance * 0.46,
-        target[2] + eye_distance * 0.86,
+        target[0] + THIRD_PERSON_CAMERA_DISTANCE * 0.58,
+        target[1] + THIRD_PERSON_CAMERA_DISTANCE * 0.44,
+        target[2] + THIRD_PERSON_CAMERA_DISTANCE * 0.72,
     ];
     let up = [0.0, 1.0, 0.0];
     let view = look_at_rh(eye, target, up);
-    let projection = perspective_rh(50.0_f32.to_radians(), aspect.max(0.1), 0.1, 360.0);
+    let projection = perspective_rh(58.0_f32.to_radians(), aspect.max(0.1), 0.1, 220.0);
     mul_mat4(projection, view)
 }
 
