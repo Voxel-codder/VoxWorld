@@ -14,7 +14,7 @@ upstream_addr="${VOXWORLD_UPSTREAM:-127.0.0.1:14004}"
 upstream_host="${upstream_addr%:*}"
 upstream_port="${upstream_addr##*:}"
 query_addr="${VOXWORLD_QUERY_SERVER:-127.0.0.1:14006}"
-static_dir="${VOXWORLD_WEB_STATIC_DIR:-web-client/web}"
+static_dir="${VOXWORLD_WEB_STATIC_DIR:-voxygen-web/web}"
 web_max_sessions="${VOXWORLD_WEB_MAX_SESSIONS:-${VOXWORLD_MAX_PLAYERS}}"
 
 ./target/release/voxworld-server-cli --non-interactive --no-auth &

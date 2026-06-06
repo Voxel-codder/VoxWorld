@@ -9215,6 +9215,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "voxworld-voxygen-web"
+version = "0.18.0"
+dependencies = [
+ "console_error_panic_hook",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+]
+
+[[package]]
 name = "voxworld-web-client"
 version = "0.18.0"
 dependencies = [

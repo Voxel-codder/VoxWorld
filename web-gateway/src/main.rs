@@ -47,7 +47,7 @@ struct Args {
     #[arg(
         long,
         env = "VOXWORLD_WEB_STATIC_DIR",
-        default_value = "web-client/web"
+        default_value = "voxygen-web/web"
     )]
     static_dir: PathBuf,
 

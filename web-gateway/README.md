@@ -1,8 +1,8 @@
 # Vox World Web Gateway
 
 This is an early HTTP and WebSocket gateway for the browser client. It serves
-`web-client/web` over HTTP and hosts `/play` browser sessions backed by the
-native `veloren-client` crate.
+`voxygen-web/web` over HTTP by default and hosts `/play` browser sessions backed
+by the native `veloren-client` crate.
 
 For each `/play` WebSocket, the gateway starts a headless native client session,
 auto-creates or loads a character, ticks the client, accepts browser JSON input,

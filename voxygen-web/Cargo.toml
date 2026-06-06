@@ -1,0 +1,34 @@
+[package]
+name = "voxworld-voxygen-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+console_error_panic_hook = "0.1"
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+wgpu = { version = "27", default-features = false, features = [
+    "std",
+    "wgsl",
+    "webgpu",
+    "fragile-send-sync-non-atomic-wasm",
+] }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "CssStyleDeclaration",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "Window",
+]

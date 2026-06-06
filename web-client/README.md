@@ -1,8 +1,8 @@
 # Vox World Web Client
 
-This crate is the first browser/WASM porting surface for Vox World. It does not
-replace the native client yet. It gives us a separate build target where browser
-platform work can land without disturbing the production server or native client.
+This crate is a temporary legacy prototype. It is not the target for the real
+browser version of Vox World because it does not render the original Voxygen
+scene/HUD. New browser-native work should go into `voxygen-web`.
 
 ## Current Scope
 
@@ -58,7 +58,6 @@ http://localhost:14080
 
 ## Porting Roadmap
 
-1. Expand `/play` snapshots from dot-level entity positions to richer entity state.
-2. Add browser-side character naming and basic account/session UX.
-3. Replace the canvas snapshot view with the real renderer path.
-4. Add asset manifest loading, compression, caching, and progressive download.
+The real browser-native port now lives in `voxygen-web`, where the work can move
+toward Voxygen's renderer, scene, HUD, asset loading, input, and browser-safe
+network transport without growing this prototype further.

@@ -25,13 +25,13 @@ if [[ "${installed_wasm_bindgen_version}" != "wasm-bindgen ${wasm_bindgen_versio
 fi
 
 cargo build --release -p voxworld-server-cli -p voxworld-web-gateway --locked
-cargo build --release -p voxworld-web-client --target wasm32-unknown-unknown --locked
+cargo build --release -p voxworld-voxygen-web --target wasm32-unknown-unknown --locked
 
-rm -rf web-client/web/pkg
+rm -rf voxygen-web/web/pkg
 wasm-bindgen \
   --target web \
-  --out-dir web-client/web/pkg \
-  target/wasm32-unknown-unknown/release/voxworld_web_client.wasm
+  --out-dir voxygen-web/web/pkg \
+  target/wasm32-unknown-unknown/release/voxworld_voxygen_web.wasm
 
-test -s web-client/web/pkg/voxworld_web_client.js
-test -s web-client/web/pkg/voxworld_web_client_bg.wasm
+test -s voxygen-web/web/pkg/voxworld_voxygen_web.js
+test -s voxygen-web/web/pkg/voxworld_voxygen_web_bg.wasm
