@@ -24,7 +24,7 @@ use veloren_world::{
     site::{PlotKind, SiteKind, plot::PlotKindMeta},
 };
 
-pub const FLOATS_PER_VERTEX: usize = 6;
+pub const FLOATS_PER_VERTEX: usize = 9;
 pub const TERRAIN_HORIZONTAL_SCALE: f32 = 0.64;
 const SEED: u32 = 7;
 const MAP_LG: u32 = 5;
@@ -2207,8 +2207,9 @@ impl PatchMeshBuilder {
         let base = (self.vertices.len() / FLOATS_PER_VERTEX) as u32;
         for vertex in mesh.vertices.chunks_exact(FLOATS_PER_VERTEX) {
             let [x, y, z] = self.render_point([vertex[0], vertex[1], vertex[2]], chunk_origin);
-            self.vertices
-                .extend_from_slice(&[x, y, z, vertex[3], vertex[4], vertex[5]]);
+            self.vertices.extend_from_slice(&[
+                x, y, z, vertex[3], vertex[4], vertex[5], vertex[6], vertex[7], vertex[8],
+            ]);
         }
         self.indices
             .extend(mesh.indices.iter().map(|index| base + *index));
@@ -2301,10 +2302,12 @@ impl BlockMeshBuilder {
         color: [f32; 3],
     ) {
         let base = (self.vertices.len() / FLOATS_PER_VERTEX) as u32;
+        let normal = Self::render_normal(face.normal());
         for corner in face.greedy_corners(plane, u, v, width, depth) {
             let [rx, ry, rz] = Self::render_point(corner);
-            self.vertices
-                .extend_from_slice(&[rx, ry, rz, color[0], color[1], color[2]]);
+            self.vertices.extend_from_slice(&[
+                rx, ry, rz, color[0], color[1], color[2], normal[0], normal[1], normal[2],
+            ]);
         }
         self.indices
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -2401,10 +2404,12 @@ impl BlockMeshBuilder {
 
     fn add_sprite_quad(&mut self, corners: [[f32; 3]; 4], color: [f32; 3]) {
         let base = (self.vertices.len() / FLOATS_PER_VERTEX) as u32;
-        for corner in corners {
-            let [x, y, z] = Self::render_point(corner);
-            self.vertices
-                .extend_from_slice(&[x, y, z, color[0], color[1], color[2]]);
+        let rendered_corners = corners.map(Self::render_point);
+        let normal = quad_normal(rendered_corners);
+        for [x, y, z] in rendered_corners {
+            self.vertices.extend_from_slice(&[
+                x, y, z, color[0], color[1], color[2], normal[0], normal[1], normal[2],
+            ]);
         }
         self.indices
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -2412,6 +2417,34 @@ impl BlockMeshBuilder {
     }
 
     fn render_point(point: [f32; 3]) -> [f32; 3] { [point[0], point[2], point[1]] }
+
+    fn render_normal(normal: Vec3<i32>) -> [f32; 3] {
+        normalize3([normal.x as f32, normal.z as f32, normal.y as f32])
+    }
+}
+
+fn quad_normal(corners: [[f32; 3]; 4]) -> [f32; 3] {
+    normalize3(cross3(
+        sub3(corners[1], corners[0]),
+        sub3(corners[2], corners[0]),
+    ))
+}
+
+fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
+
+fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2] }
+
+fn normalize3(v: [f32; 3]) -> [f32; 3] {
+    let len = dot3(v, v).sqrt().max(f32::EPSILON);
+    [v[0] / len, v[1] / len, v[2] / len]
 }
 
 #[derive(Clone, Copy)]

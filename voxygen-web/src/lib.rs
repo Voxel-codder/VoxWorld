@@ -60,11 +60,13 @@ struct Camera {
 struct VertexIn {
     @location(0) position: vec3<f32>,
     @location(1) color: vec3<f32>,
+    @location(2) normal: vec3<f32>,
 };
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
     @location(0) color: vec3<f32>,
+    @location(1) normal: vec3<f32>,
 };
 
 @group(0) @binding(0)
@@ -75,13 +77,19 @@ fn vs_main(in: VertexIn) -> VertexOut {
     var out: VertexOut;
     out.position = camera.view_proj * vec4<f32>(in.position, 1.0);
     out.color = in.color;
+    out.normal = normalize(in.normal);
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    let light = vec3<f32>(0.10, 0.11, 0.13);
-    return vec4<f32>(in.color + light, 1.0);
+    let light_dir = normalize(vec3<f32>(-0.42, 0.76, 0.50));
+    let normal = normalize(in.normal);
+    let front_light = max(dot(normal, light_dir), 0.0);
+    let back_light = max(dot(-normal, light_dir), 0.0);
+    let shade = 0.52 + front_light * 0.42 + back_light * 0.10;
+    let ambient = vec3<f32>(0.045, 0.055, 0.065);
+    return vec4<f32>(in.color * shade + ambient, 1.0);
 }
 "#;
 
@@ -1191,6 +1199,11 @@ fn create_terrain_pipeline(
                         offset: (3 * size_of::<f32>()) as u64,
                         shader_location: 1,
                     },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x3,
+                        offset: (6 * size_of::<f32>()) as u64,
+                        shader_location: 2,
+                    },
                 ],
             }],
             compilation_options: Default::default(),
@@ -1632,12 +1645,28 @@ fn add_marker_cuboid(
     for (face_index, face) in FACES.iter().enumerate() {
         let base = (vertices.len() / FLOATS_PER_VERTEX) as u32;
         let color = shade_marker_color(color, face_index);
+        let face_corners = [
+            corners[face[0]],
+            corners[face[1]],
+            corners[face[2]],
+            corners[face[3]],
+        ];
+        let normal = quad_normal(face_corners);
         for corner_index in face {
             let [vx, vy, vz] = corners[*corner_index];
-            vertices.extend_from_slice(&[vx, vy, vz, color[0], color[1], color[2]]);
+            vertices.extend_from_slice(&[
+                vx, vy, vz, color[0], color[1], color[2], normal[0], normal[1], normal[2],
+            ]);
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
+}
+
+fn quad_normal(corners: [[f32; 3]; 4]) -> [f32; 3] {
+    normalize3(cross3(
+        sub3(corners[1], corners[0]),
+        sub3(corners[2], corners[0]),
+    ))
 }
 
 fn rotated_marker_corner(

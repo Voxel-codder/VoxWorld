@@ -37,6 +37,9 @@ Current milestone:
   newly visible chunks and meshes;
 - upload visible terrain as per-chunk WebGPU vertex/index buffers and cache
   those buffers across chunk-boundary movement;
+- carry per-face normals through terrain, sprite prop, player, and entity
+  marker vertices and shade them with a directional WebGPU light instead of
+  only flat additive color, improving the 3D read of the original world preview;
 - evict generated chunk/mesh fragments outside a small player-centered
   retention radius and drop WebGPU terrain buffers for chunks that are no
   longer visible, keeping the browser preview on a bounded streaming path
