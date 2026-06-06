@@ -81,6 +81,9 @@ Current milestone:
   `common::trade::PendingTrade` phase and accept flow, with selected merchant
   wares, a player coin offer, and buy/sell balance text before
   server-authoritative inventory actions are attached;
+- build preview player/merchant `Inventory` values from the displayed wares and
+  coins, then route preview offers through original `TradeAction::AddItem`
+  processing so offer quantities are clamped by real inventory slot contents;
 - preserve original `EntityInfo.body` categories in the web preview and render
   body-aware temporary silhouettes for humanoid, quadruped, flyer, fish, large,
   and object entities;
@@ -99,7 +102,7 @@ Next milestones:
   original rtsim NPC agents, profession inventories, dialogue, and loaded-agent
   state;
 - replace the browser-side pending-trade preview panel with the real Voxygen
-  trade HUD, inventory slots, and server-authoritative trade actions;
+  trade HUD and server-authoritative trade actions against live inventories;
 - replace the visible 5x5 GPU chunk-buffer set with fully streamed loading,
   eviction, and independent chunk draw management around the live player
   position;

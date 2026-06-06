@@ -5,7 +5,7 @@ mod world_preview;
 use std::{cell::RefCell, collections::HashMap, num::NonZeroU64, rc::Rc};
 
 use common::{
-    comp::inventory::slot::InvSlotId,
+    comp::{Inventory, Item, inventory::slot::InvSlotId},
     trade::{PendingTrade, TradeAction, TradePhase},
     uid::Uid,
 };
@@ -296,14 +296,19 @@ impl TradeInput {
 struct PreviewTradeSession {
     panel: TradePanelPreview,
     model: PendingTrade,
+    player_inventory: Inventory,
+    merchant_inventory: Inventory,
     selected_wares: Vec<usize>,
 }
 
 impl PreviewTradeSession {
     fn new(panel: TradePanelPreview) -> Self {
+        let (player_inventory, merchant_inventory) = preview_trade_inventories(&panel);
         Self {
             panel,
             model: PendingTrade::new(preview_trade_uid(1), preview_trade_uid(2)),
+            player_inventory,
+            merchant_inventory,
             selected_wares: Vec::new(),
         }
     }
@@ -368,23 +373,52 @@ impl PreviewTradeSession {
     fn merchant_offer_slots(&self) -> usize { self.model.offers[1].len() }
 
     fn sync_model_offers(&mut self) {
-        self.model.offers[0].clear();
-        self.model.offers[1].clear();
+        self.model = PendingTrade::new(preview_trade_uid(1), preview_trade_uid(2));
         if self.selected_wares.is_empty() {
-            self.model.accept_flags = [false, false];
             return;
         }
-        self.model.offers[0].insert(InvSlotId::new(0, 0), 1);
+        let inventories = [&self.player_inventory, &self.merchant_inventory];
+        self.model.process_trade_action(
+            0,
+            TradeAction::AddItem {
+                item: InvSlotId::new(0, 0),
+                quantity: self.player_coin_offer().ceil().max(1.0) as u32,
+                ours: true,
+            },
+            &inventories,
+        );
         for index in &self.selected_wares {
-            self.model.offers[1]
-                .insert(InvSlotId::new(0, (*index).min(u16::MAX as usize) as u16), 1);
+            self.model.process_trade_action(
+                0,
+                TradeAction::AddItem {
+                    item: InvSlotId::new(0, (*index).min(u16::MAX as usize) as u16),
+                    quantity: 1,
+                    ours: false,
+                },
+                &inventories,
+            );
         }
-        self.model.accept_flags = [false, false];
     }
 }
 
 fn preview_trade_uid(id: u64) -> Uid {
     Uid(NonZeroU64::new(id).expect("preview trade uid must be non-zero"))
+}
+
+fn preview_trade_inventories(panel: &TradePanelPreview) -> (Inventory, Inventory) {
+    let mut player_inventory = Inventory::with_empty();
+    let mut merchant_inventory = Inventory::with_empty();
+
+    let mut coins = Item::new_from_asset_expect("common.items.utility.coins");
+    let _ = coins.set_amount(coins.max_amount().min(10_000));
+    let _ = player_inventory.push(coins);
+
+    for ware in &panel.wares {
+        let item = Item::new_from_asset_expect(&ware.item_id);
+        let _ = merchant_inventory.push(item);
+    }
+
+    (player_inventory, merchant_inventory)
 }
 
 fn camera_forward_world() -> Vec2<f32> {

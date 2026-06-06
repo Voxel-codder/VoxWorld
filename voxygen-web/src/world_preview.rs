@@ -100,6 +100,7 @@ pub struct TradePanelPreview {
 
 #[derive(Clone)]
 pub struct TradePanelWare {
+    pub item_id: String,
     pub name: String,
     pub quality: String,
     pub buy: String,
@@ -163,6 +164,7 @@ struct TradePreview {
 }
 
 struct TradePreviewItem {
+    item_id: &'static str,
     name: String,
     buy_coins: f32,
     sell_coins: f32,
@@ -228,6 +230,7 @@ impl TradePreviewItem {
 
     fn panel_ware(&self) -> TradePanelWare {
         TradePanelWare {
+            item_id: self.item_id.to_owned(),
             name: self.name.clone(),
             quality: format!("{:?}", self.quality),
             buy: format!("{}c", format_coin_price(self.buy_coins)),
@@ -780,6 +783,7 @@ fn trade_preview_item(site_prices: &SitePrices, item_id: &'static str) -> Option
         / coin_price;
 
     Some(TradePreviewItem {
+        item_id,
         name: short_item_name(item_id),
         buy_coins,
         sell_coins,
