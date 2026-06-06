@@ -64,6 +64,7 @@ and one-shot control actions:
 
 The gateway responds with stage, snapshot, chat, event, and error messages.
 Snapshots currently include username, in-game state, position, health, energy,
+defeated state,
 inventory summary, the nearest pickup/NPC interaction hint, online player names,
 character count, and up to 96 nearby entity positions with available health.
 Chat messages include a browser-friendly scope, optional sender name, and

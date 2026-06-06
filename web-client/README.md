@@ -15,8 +15,9 @@ platform work can land without disturbing the production server or native client
 - Keyboard input forwarding for WASD movement, PageUp/PageDown vertical movement, Space jump, Shift roll, E interact, R wield, Tab loadout swap, and basic combat keys
 - Mouse and touch look-direction forwarding from the canvas
 - Mouse primary and secondary action forwarding from the canvas
-- On-screen touch movement, combat, interact, wield, and loadout controls for mobile browsers
+- On-screen touch movement, combat, interact, pickup, wield, loadout, sneak, sit, and respawn controls for mobile browsers
 - Snapshot-driven canvas view for the player, nearby entities, health, entity health, and energy
+- Defeated-state respawn hint from `/play` snapshots
 - Inventory summary HUD from `/play` snapshots
 - Nearby pickup/NPC interaction hint from `/play` snapshots
 - Browser-persisted guest name passed through `/play?name=...`

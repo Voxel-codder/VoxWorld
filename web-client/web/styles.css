@@ -146,6 +146,13 @@ body {
 }
 
 @media (hover: none), (pointer: coarse) {
+  .connection-panel {
+    top: 16px;
+    bottom: auto;
+    max-height: calc(100vh - 236px);
+    overflow: auto;
+  }
+
   .touch-controls {
     position: fixed;
     left: 16px;

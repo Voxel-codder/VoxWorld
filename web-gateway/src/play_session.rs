@@ -104,6 +104,7 @@ enum SessionMessage {
         position: Option<[f32; 3]>,
         health: Option<PlayerStat>,
         energy: Option<PlayerStat>,
+        is_dead: bool,
         players_online: Vec<String>,
         character_count: usize,
         entities: Vec<SnapshotEntity>,
@@ -492,7 +493,7 @@ fn send_snapshot(
     let entities = snapshot_entities(client);
     let inventory = snapshot_inventory(client);
     let interaction = snapshot_interaction(client);
-    let (health, energy) = snapshot_player_stats(client);
+    let (health, energy, is_dead) = snapshot_player_stats(client);
 
     send_json(outbound, SessionMessage::Snapshot {
         username: username.to_owned(),
@@ -500,6 +501,7 @@ fn send_snapshot(
         position,
         health,
         energy,
+        is_dead,
         players_online,
         character_count: client.character_list().characters.len(),
         entities,
@@ -508,17 +510,17 @@ fn send_snapshot(
     });
 }
 
-fn snapshot_player_stats(client: &Client) -> (Option<PlayerStat>, Option<PlayerStat>) {
+fn snapshot_player_stats(client: &Client) -> (Option<PlayerStat>, Option<PlayerStat>, bool) {
     let ecs = client.state().ecs();
     let entity = client.entity();
-    let health = ecs
-        .read_storage::<comp::Health>()
-        .get(entity)
-        .map(|health| PlayerStat {
-            current: health.current(),
-            maximum: health.maximum(),
-            fraction: health.fraction().clamp(0.0, 1.0),
-        });
+    let healths = ecs.read_storage::<comp::Health>();
+    let health = healths.get(entity);
+    let health_stat = health.map(|health| PlayerStat {
+        current: health.current(),
+        maximum: health.maximum(),
+        fraction: health.fraction().clamp(0.0, 1.0),
+    });
+    let is_dead = health.is_some_and(|health| health.is_dead);
     let energy = ecs
         .read_storage::<comp::Energy>()
         .get(entity)
@@ -528,7 +530,7 @@ fn snapshot_player_stats(client: &Client) -> (Option<PlayerStat>, Option<PlayerS
             fraction: energy.fraction().clamp(0.0, 1.0),
         });
 
-    (health, energy)
+    (health_stat, energy, is_dead)
 }
 
 fn snapshot_entities(client: &Client) -> Vec<SnapshotEntity> {

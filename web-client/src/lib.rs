@@ -36,6 +36,7 @@ struct SnapshotView {
     position: Option<[f64; 3]>,
     health: Option<StatView>,
     energy: Option<StatView>,
+    is_dead: bool,
     players_online: u32,
     entities: Vec<EntityView>,
     inventory: Option<InventoryView>,
@@ -380,6 +381,7 @@ fn parse_snapshot(value: &JsValue) -> Option<SnapshotView> {
     let position = array3_property(value, "position");
     let health = stat_property(value, "health");
     let energy = stat_property(value, "energy");
+    let is_dead = bool_property(value, "is_dead");
     let inventory = inventory_property(value, "inventory");
     let interaction = interaction_property(value, "interaction");
     let entities = Reflect::get(value, &JsValue::from_str("entities"))
@@ -407,6 +409,7 @@ fn parse_snapshot(value: &JsValue) -> Option<SnapshotView> {
         position,
         health,
         energy,
+        is_dead,
         players_online,
         entities,
         inventory,
@@ -754,12 +757,22 @@ fn install_touch_controls(document: &Document) -> Result<(), JsValue> {
         ControlKind::Interact,
     )?;
     install_control_button(
+        element_by_id(document, "touch-pickup")?,
+        ControlKind::Pickup,
+    )?;
+    install_control_button(
         element_by_id(document, "touch-wield")?,
         ControlKind::ToggleWield,
     )?;
     install_control_button(
         element_by_id(document, "touch-swap-loadout")?,
         ControlKind::SwapLoadout,
+    )?;
+    install_control_button(element_by_id(document, "touch-sneak")?, ControlKind::Sneak)?;
+    install_control_button(element_by_id(document, "touch-sit")?, ControlKind::Sit)?;
+    install_control_button(
+        element_by_id(document, "touch-respawn")?,
+        ControlKind::Respawn,
     )?;
     Ok(())
 }
@@ -1208,6 +1221,10 @@ fn draw_snapshot(
         draw_inventory(context, 28.0, 140.0, inventory);
     }
 
+    if snapshot.is_dead {
+        draw_respawn_hint(context, width, height);
+    }
+
     if let Some(interaction) = &snapshot.interaction {
         draw_interaction_hint(context, width, height, interaction);
     }
@@ -1292,6 +1309,27 @@ fn draw_interaction_hint(
     context.set_fill_style(&JsValue::from_str("#e7f7ff"));
     context.set_font("700 14px system-ui, sans-serif");
     let _ = context.fill_text_with_max_width(&text, x + 14.0, y + 26.0, panel_width - 28.0);
+}
+
+#[allow(deprecated)]
+fn draw_respawn_hint(context: &CanvasRenderingContext2d, width: f64, height: f64) {
+    let panel_width = (width - 48.0).max(240.0).min(460.0);
+    let panel_height = 52.0;
+    let x = ((width - panel_width) * 0.5).max(16.0);
+    let y = ((height - panel_height) * 0.5).max(96.0);
+
+    context.set_fill_style(&JsValue::from_str("rgba(73, 16, 26, 0.84)"));
+    context.fill_rect(x, y, panel_width, panel_height);
+    context.set_stroke_style(&JsValue::from_str("rgba(255, 156, 156, 0.56)"));
+    context.stroke_rect(x, y, panel_width, panel_height);
+    context.set_fill_style(&JsValue::from_str("#ffe1e1"));
+    context.set_font("700 15px system-ui, sans-serif");
+    let _ = context.fill_text_with_max_width(
+        "Defeated - press L / Resp to respawn",
+        x + 14.0,
+        y + 31.0,
+        panel_width - 28.0,
+    );
 }
 
 fn item_label(item: Option<&InventoryItemView>) -> String {
