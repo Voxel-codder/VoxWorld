@@ -108,6 +108,18 @@ impl InputState {
     }
 
     fn look(self) -> (f32, f32, f32) { (self.look_x, self.look_y, self.look_z) }
+
+    fn clear_controls(&mut self) -> bool {
+        let had_controls =
+            self.forward || self.back || self.left || self.right || self.up || self.down;
+        self.forward = false;
+        self.back = false;
+        self.left = false;
+        self.right = false;
+        self.up = false;
+        self.down = false;
+        had_controls
+    }
 }
 
 #[wasm_bindgen(start)]
@@ -136,6 +148,7 @@ pub fn start() -> Result<(), JsValue> {
     install_connect_handler(connect_button, server_url, status.clone())?;
     install_chat_handler(chat_form, chat_input, status)?;
     install_keyboard_handlers(&window)?;
+    install_session_lifecycle_handlers(&window)?;
     install_touch_controls(&document)?;
     append_chat_line("system", "Session log ready");
 
@@ -150,14 +163,13 @@ fn install_connect_handler(
     let on_click = Closure::<dyn FnMut(Event)>::new(move |_| {
         let url = server_url.value();
         status.set_text_content(Some("Connecting..."));
+        close_existing_socket("reconnect");
 
         match WebSocket::new(&url) {
             Ok(socket) => {
                 socket.set_binary_type(BinaryType::Arraybuffer);
                 attach_socket_handlers(&socket, status.clone());
-                SOCKET.with(|slot| {
-                    *slot.borrow_mut() = Some(socket);
-                });
+                store_socket(socket);
             },
             Err(error) => {
                 status.set_text_content(Some("Connection failed before opening"));
@@ -198,6 +210,7 @@ fn attach_socket_handlers(socket: &WebSocket, status: HtmlElement) {
     on_error.forget();
 
     let close_status = status.clone();
+    let close_socket = socket.clone();
     let on_close = Closure::<dyn FnMut(CloseEvent)>::new(move |event: CloseEvent| {
         let reason = if event.reason().is_empty() {
             "Connection closed".to_owned()
@@ -206,12 +219,41 @@ fn attach_socket_handlers(socket: &WebSocket, status: HtmlElement) {
         };
         close_status.set_text_content(Some(&reason));
         append_chat_line("system", &reason);
-        SOCKET.with(|slot| {
-            *slot.borrow_mut() = None;
-        });
+        clear_socket_if_current(&close_socket);
     });
     socket.set_onclose(Some(on_close.as_ref().unchecked_ref()));
     on_close.forget();
+}
+
+fn store_socket(socket: WebSocket) {
+    SOCKET.with(|slot| {
+        *slot.borrow_mut() = Some(socket);
+    });
+}
+
+fn clear_socket_if_current(socket: &WebSocket) {
+    SOCKET.with(|slot| {
+        let should_clear = slot
+            .borrow()
+            .as_ref()
+            .is_some_and(|current| js_sys::Object::is(current.as_ref(), socket.as_ref()));
+
+        if should_clear {
+            *slot.borrow_mut() = None;
+        }
+    });
+}
+
+fn close_existing_socket(reason: &str) {
+    SOCKET.with(|slot| {
+        let Some(socket) = slot.borrow_mut().take() else {
+            return;
+        };
+
+        if socket.ready_state() != WebSocket::CLOSED {
+            let _ = socket.close_with_code_and_reason(1000, reason);
+        }
+    });
 }
 
 fn summarize_server_message(data: &JsValue) -> String {
@@ -381,22 +423,7 @@ fn send_chat_message(input: &HtmlInputElement, status: &HtmlElement) {
     }
 
     let payload = format!(r#"{{"type":"chat","message":{}}}"#, json_string(&message));
-    let sent = SOCKET.with(|slot| {
-        let socket = slot.borrow();
-        let Some(socket) = socket.as_ref() else {
-            return false;
-        };
-        if socket.ready_state() != WebSocket::OPEN {
-            return false;
-        }
-        match socket.send_with_str(&payload) {
-            Ok(()) => true,
-            Err(error) => {
-                web_sys::console::error_1(&error);
-                false
-            },
-        }
-    });
+    let sent = send_socket_message(&payload);
 
     if sent {
         input.set_value("");
@@ -495,6 +522,34 @@ fn install_keyboard_handlers(window: &Window) -> Result<(), JsValue> {
     });
     window.add_event_listener_with_callback("keyup", on_keyup.as_ref().unchecked_ref())?;
     on_keyup.forget();
+
+    Ok(())
+}
+
+fn install_session_lifecycle_handlers(window: &Window) -> Result<(), JsValue> {
+    let on_blur = Closure::<dyn FnMut(Event)>::new(move |_| {
+        release_controls();
+    });
+    window.add_event_listener_with_callback("blur", on_blur.as_ref().unchecked_ref())?;
+    on_blur.forget();
+
+    let on_pagehide = Closure::<dyn FnMut(Event)>::new(move |_| {
+        release_controls();
+        close_existing_socket("page hidden");
+    });
+    window.add_event_listener_with_callback("pagehide", on_pagehide.as_ref().unchecked_ref())?;
+    on_pagehide.forget();
+
+    if let Some(document) = window.document() {
+        let on_visibility_change = Closure::<dyn FnMut(Event)>::new(move |_| {
+            release_controls();
+        });
+        document.add_event_listener_with_callback(
+            "visibilitychange",
+            on_visibility_change.as_ref().unchecked_ref(),
+        )?;
+        on_visibility_change.forget();
+    }
 
     Ok(())
 }
@@ -624,6 +679,17 @@ fn set_movement(direction: MoveDirection, pressed: bool) -> bool {
     true
 }
 
+fn release_controls() {
+    let changed = INPUT.with(|input| input.borrow_mut().clear_controls());
+    if changed {
+        send_input_state();
+    }
+
+    for action in ActionKind::all() {
+        send_action(action, false);
+    }
+}
+
 fn install_pointer_handlers(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
     let move_canvas = canvas.clone();
     let on_pointer_move = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
@@ -717,13 +783,7 @@ fn send_action(action: ActionKind, pressed: bool) {
         action.as_str()
     );
 
-    SOCKET.with(|slot| {
-        if let Some(socket) = slot.borrow().as_ref() {
-            if let Err(error) = socket.send_with_str(&message) {
-                web_sys::console::error_1(&error);
-            }
-        }
-    });
+    let _ = send_socket_message(&message);
 }
 
 fn send_input_state() {
@@ -733,16 +793,39 @@ fn send_input_state() {
         r#"{{"type":"input","move_x":{move_x},"move_y":{move_y},"move_z":{move_z},"look_x":{look_x},"look_y":{look_y},"look_z":{look_z}}}"#
     );
 
+    let _ = send_socket_message(&message);
+}
+
+fn send_socket_message(message: &str) -> bool {
     SOCKET.with(|slot| {
-        if let Some(socket) = slot.borrow().as_ref() {
-            if let Err(error) = socket.send_with_str(&message) {
-                web_sys::console::error_1(&error);
-            }
+        let socket = slot.borrow();
+        let Some(socket) = socket.as_ref() else {
+            return false;
+        };
+        if socket.ready_state() != WebSocket::OPEN {
+            return false;
         }
-    });
+        match socket.send_with_str(message) {
+            Ok(()) => true,
+            Err(error) => {
+                web_sys::console::error_1(&error);
+                false
+            },
+        }
+    })
 }
 
 impl ActionKind {
+    const fn all() -> [Self; 5] {
+        [
+            Self::Primary,
+            Self::Secondary,
+            Self::Block,
+            Self::Roll,
+            Self::Jump,
+        ]
+    }
+
     fn as_str(self) -> &'static str {
         match self {
             Self::Primary => "primary",

@@ -20,6 +20,7 @@ platform work can land without disturbing the production server or native client
 - Browser-persisted guest name passed through `/play?name=...`
 - Browser chat input and session event log over the `/play` transport
 - Structured player chat display for messages received from the game server
+- Duplicate connection cleanup and focus-loss input release for browser sessions
 
 ## Build
 
