@@ -17,6 +17,8 @@ const STATUS_ID: &str = "voxworld-status";
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 const PLAYER_SPEED_BLOCKS_PER_SECOND: f32 = 14.0;
 const MAX_FRAME_DELTA_SECONDS: f32 = 0.05;
+const MAX_PLAYER_STEP_UP_BLOCKS: f32 = 2.25;
+const MAX_PLAYER_DROP_BLOCKS: f32 = 7.0;
 const THIRD_PERSON_CAMERA_DISTANCE: f32 = 34.0;
 const TERRAIN_SHADER: &str = r#"
 struct Camera {
@@ -125,20 +127,24 @@ struct TerrainChunkGpuMesh {
 
 struct PlayerState {
     wpos: Vec2<f32>,
+    terrain_z: f32,
     center_chunk_pos: Vec2<i32>,
     aspect: f32,
     input: InputState,
     last_frame_ms: Option<f64>,
+    blocked_move_count: u32,
 }
 
 impl PlayerState {
-    fn new(wpos: Vec2<f32>, center_chunk_pos: Vec2<i32>, aspect: f32) -> Self {
+    fn new(wpos: Vec2<f32>, terrain_z: f32, center_chunk_pos: Vec2<i32>, aspect: f32) -> Self {
         Self {
             wpos,
+            terrain_z,
             center_chunk_pos,
             aspect,
             input: InputState::default(),
             last_frame_ms: None,
+            blocked_move_count: 0,
         }
     }
 
@@ -192,6 +198,7 @@ impl VoxygenWebClient {
         let center_chunk_pos = world_preview.initial_center_chunk_pos();
         let player_wpos = world_preview.initial_player_wpos();
         let world_mesh = world_preview.generate_mesh(center_chunk_pos)?;
+        let player_terrain_z = world_preview.player_terrain_z(player_wpos);
         set_detail(
             "Original WorldSim terrain patch generated. Requesting browser WebGPU adapter...",
         );
@@ -301,7 +308,7 @@ impl VoxygenWebClient {
             camera_bind_group,
             world_preview,
             world_mesh,
-            player: PlayerState::new(player_wpos, center_chunk_pos, aspect),
+            player: PlayerState::new(player_wpos, player_terrain_z, center_chunk_pos, aspect),
             keydown_listener: None,
             keyup_listener: None,
         })
@@ -466,8 +473,15 @@ impl VoxygenWebClient {
             return Ok(());
         }
 
-        self.player.wpos += direction * (PLAYER_SPEED_BLOCKS_PER_SECOND * dt);
-        self.player.wpos = self.world_preview.clamp_player_wpos(self.player.wpos);
+        let proposed_wpos = self.world_preview.clamp_player_wpos(
+            self.player.wpos + direction * (PLAYER_SPEED_BLOCKS_PER_SECOND * dt),
+        );
+        let (resolved_wpos, blocked) = self.resolve_player_movement(proposed_wpos);
+        self.player.wpos = resolved_wpos;
+        self.player.terrain_z = self.world_preview.player_terrain_z(self.player.wpos);
+        if blocked {
+            self.player.blocked_move_count = self.player.blocked_move_count.saturating_add(1);
+        }
 
         let next_center = self.world_preview.center_chunk_for_wpos(self.player.wpos);
         if next_center != self.player.center_chunk_pos {
@@ -486,6 +500,44 @@ impl VoxygenWebClient {
         set_status("Original WorldSim terrain is rendering.", StatusState::Ok);
         set_detail(&self.scene_summary());
         Ok(())
+    }
+
+    fn resolve_player_movement(&self, proposed_wpos: Vec2<f32>) -> (Vec2<f32>, bool) {
+        let current_wpos = self.player.wpos;
+        if self.can_move_between(current_wpos, proposed_wpos) {
+            return (proposed_wpos, false);
+        }
+
+        let mut resolved_wpos = current_wpos;
+        let mut blocked = true;
+        let x_only_wpos = Vec2::new(proposed_wpos.x, resolved_wpos.y);
+        if (x_only_wpos.x - resolved_wpos.x).abs() > f32::EPSILON
+            && self.can_move_between(resolved_wpos, x_only_wpos)
+        {
+            resolved_wpos = x_only_wpos;
+        }
+        let y_only_wpos = Vec2::new(resolved_wpos.x, proposed_wpos.y);
+        if (y_only_wpos.y - resolved_wpos.y).abs() > f32::EPSILON
+            && self.can_move_between(resolved_wpos, y_only_wpos)
+        {
+            resolved_wpos = y_only_wpos;
+        }
+
+        if resolved_wpos != current_wpos {
+            blocked = true;
+        }
+        (resolved_wpos, blocked)
+    }
+
+    fn can_move_between(&self, from_wpos: Vec2<f32>, to_wpos: Vec2<f32>) -> bool {
+        let Some(from_z) = self.world_preview.cached_player_terrain_z(from_wpos) else {
+            return false;
+        };
+        let Some(to_z) = self.world_preview.cached_player_terrain_z(to_wpos) else {
+            return false;
+        };
+        let delta_z = to_z - from_z;
+        delta_z <= MAX_PLAYER_STEP_UP_BLOCKS && delta_z >= -MAX_PLAYER_DROP_BLOCKS
     }
 
     fn update_camera(&self) {
@@ -517,14 +569,13 @@ impl VoxygenWebClient {
     fn scene_summary(&self) -> String {
         let (chunks_x, chunks_y) = self.world_mesh.chunk_dimensions;
         let (patch_x, patch_y) = self.world_mesh.chunk_patch;
-        let player_terrain_z = self.world_preview.player_terrain_z(self.player.wpos);
         format!(
             "Seed {} rendered {} original TerrainChunks in a {}x{} patch around {:?} inside a \
              {}x{} WorldSim. New chunks/meshes this update: {}/{}. Chunk/mesh cache: {}/{}. GPU \
              chunk buffers: {}/{}. Player block position: ({:.1}, {:.1}). Player terrain z: \
-             {:.1}. WebGPU block faces: {}. Filled blocks: {}. Liquid blocks: {}. Visible entity \
-             markers: {}. Entity spawns: {}. World features loaded: {}. Wildlife spawn manifests: \
-             {}.",
+             {:.1}. Blocked terrain moves: {}. WebGPU block faces: {}. Filled blocks: {}. Liquid \
+             blocks: {}. Visible entity markers: {}. Entity spawns: {}. World features loaded: \
+             {}. Wildlife spawn manifests: {}.",
             self.world_mesh.seed,
             self.world_mesh.generated_chunks,
             patch_x,
@@ -540,7 +591,8 @@ impl VoxygenWebClient {
             self.terrain_chunk_buffers.len(),
             self.player.wpos.x,
             self.player.wpos.y,
-            player_terrain_z,
+            self.player.terrain_z,
+            self.player.blocked_move_count,
             self.world_mesh.terrain_faces,
             self.world_mesh.filled_blocks,
             self.world_mesh.liquid_blocks,

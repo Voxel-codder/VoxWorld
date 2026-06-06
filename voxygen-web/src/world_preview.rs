@@ -189,6 +189,11 @@ impl OriginalWorldPreview {
             .unwrap_or_else(|| self.world.sim().get_surface_alt_approx(sample_wpos) + 0.5)
     }
 
+    pub fn cached_player_terrain_z(&self, player_wpos: Vec2<f32>) -> Option<f32> {
+        self.cached_accessible_player_pos(player_sample_wpos(player_wpos))
+            .map(|pos| pos.z)
+    }
+
     pub fn generate_mesh(
         &mut self,
         center_chunk_pos: Vec2<i32>,

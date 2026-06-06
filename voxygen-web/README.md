@@ -34,6 +34,9 @@ Current milestone:
 - ground the browser-side player marker and camera target using cached original
   `TerrainChunk::find_accessible_pos` samples instead of only approximate
   `WorldSim` surface altitude;
+- constrain browser-side movement with cached accessible terrain z samples so
+  steep steps and drops block or slide movement instead of allowing flat-plane
+  traversal through every slope;
 - frame the WebGPU scene with a player-following third-person camera instead
   of the earlier far-away terrain-preview view;
 - convert original `ChunkSupplement.entity_spawns` into visible 3D markers and
