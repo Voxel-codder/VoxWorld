@@ -32,7 +32,9 @@ features = [
     "CssStyleDeclaration",
     "Document",
     "Element",
+    "Event",
     "HtmlCanvasElement",
     "HtmlElement",
+    "KeyboardEvent",
     "Window",
 ]

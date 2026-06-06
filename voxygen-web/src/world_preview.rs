@@ -14,6 +14,19 @@ use veloren_world::{
 };
 
 pub const FLOATS_PER_VERTEX: usize = 6;
+const SEED: u32 = 7;
+const MAP_LG: u32 = 5;
+const CHUNK_RADIUS: i32 = 1;
+
+pub struct OriginalWorldPreview {
+    world: World,
+    index_owned: IndexOwned,
+    preview_features: Features,
+    dimensions: Vec2<u32>,
+    enabled_world_features: usize,
+    wildlife_spawn_manifests: usize,
+    seed: u32,
+}
 
 pub struct OriginalWorldMesh {
     pub vertices: Vec<f32>,
@@ -31,80 +44,115 @@ pub struct OriginalWorldMesh {
     pub seed: u32,
 }
 
-pub fn build_original_world_mesh() -> Result<OriginalWorldMesh, String> {
-    const SEED: u32 = 7;
-    const MAP_LG: u32 = 5;
-    const CHUNK_RADIUS: i32 = 1;
-
-    let threadpool = ThreadPoolBuilder::new()
-        .num_threads(1)
-        .use_current_thread()
-        .build()
-        .map_err(|error| format!("failed to create browser worldgen threadpool: {error}"))?;
-    let mut sim = WorldSim::generate(
-        SEED,
-        WorldOpts {
-            seed_elements: true,
-            world_file: FileOpts::Generate(GenOpts {
-                x_lg: MAP_LG,
-                y_lg: MAP_LG,
-                ..GenOpts::default()
-            }),
-            calendar: None,
-        },
-        &threadpool,
-        &|_| {},
-    );
-    Spot::generate(&mut sim);
-    let dimensions = sim.get_size();
-    if dimensions.x < 2 || dimensions.y < 2 {
-        return Err("original WorldSim generated too few chunks for terrain mesh".to_owned());
-    }
-
-    let world = World::from_sim_for_web_preview(sim);
-    let index_owned = IndexOwned::new(Index::new(SEED));
-    let index_ref = index_owned.as_index_ref();
-    let enabled_world_features = count_enabled_features(index_ref.features);
-    let wildlife_spawn_manifests = index_ref.wildlife_spawns.len();
-    let preview_features = terrain_chunk_preview_features(index_ref.features);
-    let preview_index = IndexRef {
-        features: &preview_features,
-        ..index_ref
-    };
-    let center_chunk_pos = Vec2::new(dimensions.x as i32 / 2, dimensions.y as i32 / 2);
-    let mut preview_chunks = Vec::new();
-    for y in -CHUNK_RADIUS..=CHUNK_RADIUS {
-        for x in -CHUNK_RADIUS..=CHUNK_RADIUS {
-            let chunk_pos = center_chunk_pos + Vec2::new(x, y);
-            if chunk_pos.x < 0
-                || chunk_pos.y < 0
-                || chunk_pos.x >= dimensions.x as i32
-                || chunk_pos.y >= dimensions.y as i32
-            {
-                continue;
-            }
-            let (terrain_chunk, supplement) = world
-                .generate_chunk(preview_index, chunk_pos, None, || false, None)
-                .map_err(|_| {
-                    format!("original World::generate_chunk cancelled at {chunk_pos:?}")
-                })?;
-            preview_chunks.push(GeneratedPreviewChunk {
-                pos: chunk_pos,
-                chunk: terrain_chunk,
-                entity_spawns: supplement.entity_spawns.len(),
-            });
+impl OriginalWorldPreview {
+    pub fn new() -> Result<Self, String> {
+        let threadpool = ThreadPoolBuilder::new()
+            .num_threads(1)
+            .use_current_thread()
+            .build()
+            .map_err(|error| format!("failed to create browser worldgen threadpool: {error}"))?;
+        let mut sim = WorldSim::generate(
+            SEED,
+            WorldOpts {
+                seed_elements: true,
+                world_file: FileOpts::Generate(GenOpts {
+                    x_lg: MAP_LG,
+                    y_lg: MAP_LG,
+                    ..GenOpts::default()
+                }),
+                calendar: None,
+            },
+            &threadpool,
+            &|_| {},
+        );
+        Spot::generate(&mut sim);
+        let dimensions = sim.get_size();
+        if dimensions.x < 2 || dimensions.y < 2 {
+            return Err("original WorldSim generated too few chunks for terrain mesh".to_owned());
         }
+
+        let world = World::from_sim_for_web_preview(sim);
+        let index_owned = IndexOwned::new(Index::new(SEED));
+        let index_ref = index_owned.as_index_ref();
+        let enabled_world_features = count_enabled_features(index_ref.features);
+        let wildlife_spawn_manifests = index_ref.wildlife_spawns.len();
+        let preview_features = terrain_chunk_preview_features(index_ref.features);
+
+        Ok(Self {
+            world,
+            index_owned,
+            preview_features,
+            dimensions,
+            enabled_world_features,
+            wildlife_spawn_manifests,
+            seed: SEED,
+        })
     }
 
-    mesh_from_terrain_chunks(
-        &preview_chunks,
-        dimensions,
-        center_chunk_pos,
-        CHUNK_RADIUS,
-        SEED,
-        enabled_world_features,
-        wildlife_spawn_manifests,
-    )
+    pub fn initial_center_chunk_pos(&self) -> Vec2<i32> {
+        Vec2::new(self.dimensions.x as i32 / 2, self.dimensions.y as i32 / 2)
+    }
+
+    pub fn clamp_center_chunk_pos(&self, chunk_pos: Vec2<i32>) -> Vec2<i32> {
+        let max_world_x = self.dimensions.x.saturating_sub(1) as i32;
+        let max_world_y = self.dimensions.y.saturating_sub(1) as i32;
+        let min_x = CHUNK_RADIUS.min(max_world_x);
+        let min_y = CHUNK_RADIUS.min(max_world_y);
+        let max_x = (max_world_x - CHUNK_RADIUS).max(min_x);
+        let max_y = (max_world_y - CHUNK_RADIUS).max(min_y);
+
+        Vec2::new(
+            chunk_pos.x.clamp(min_x, max_x),
+            chunk_pos.y.clamp(min_y, max_y),
+        )
+    }
+
+    pub fn generate_mesh(&self, center_chunk_pos: Vec2<i32>) -> Result<OriginalWorldMesh, String> {
+        let center_chunk_pos = self.clamp_center_chunk_pos(center_chunk_pos);
+        let index_ref = self.index_owned.as_index_ref();
+        let preview_index = IndexRef {
+            features: &self.preview_features,
+            ..index_ref
+        };
+        let mut preview_chunks = Vec::new();
+        for y in -CHUNK_RADIUS..=CHUNK_RADIUS {
+            for x in -CHUNK_RADIUS..=CHUNK_RADIUS {
+                let chunk_pos = center_chunk_pos + Vec2::new(x, y);
+                if chunk_pos.x < 0
+                    || chunk_pos.y < 0
+                    || chunk_pos.x >= self.dimensions.x as i32
+                    || chunk_pos.y >= self.dimensions.y as i32
+                {
+                    continue;
+                }
+                let (terrain_chunk, supplement) = self
+                    .world
+                    .generate_chunk(preview_index, chunk_pos, None, || false, None)
+                    .map_err(|_| {
+                        format!("original World::generate_chunk cancelled at {chunk_pos:?}")
+                    })?;
+                preview_chunks.push(GeneratedPreviewChunk {
+                    pos: chunk_pos,
+                    chunk: terrain_chunk,
+                    entity_spawns: supplement.entity_spawns.len(),
+                });
+            }
+        }
+
+        mesh_from_terrain_chunks(
+            &preview_chunks,
+            self.dimensions,
+            center_chunk_pos,
+            CHUNK_RADIUS,
+            self.seed,
+            self.enabled_world_features,
+            self.wildlife_spawn_manifests,
+        )
+    }
+}
+
+pub fn build_original_world_preview() -> Result<OriginalWorldPreview, String> {
+    OriginalWorldPreview::new()
 }
 
 #[allow(clippy::struct_excessive_bools)]

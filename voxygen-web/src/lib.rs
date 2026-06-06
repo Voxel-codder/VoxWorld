@@ -2,9 +2,11 @@
 
 mod world_preview;
 
-use wasm_bindgen::{JsCast, prelude::*};
-use web_sys::{Document, HtmlCanvasElement, Window};
-use world_preview::{FLOATS_PER_VERTEX, OriginalWorldMesh};
+use std::{cell::RefCell, rc::Rc};
+use vek::Vec2;
+use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
+use web_sys::{Document, HtmlCanvasElement, KeyboardEvent, Window};
+use world_preview::{FLOATS_PER_VERTEX, OriginalWorldMesh, OriginalWorldPreview};
 
 const CANVAS_ID: &str = "voxworld-canvas";
 const DETAIL_ID: &str = "voxworld-detail";
@@ -55,10 +57,20 @@ pub fn start() {
     wasm_bindgen_futures::spawn_local(async {
         match VoxygenWebClient::new().await {
             Ok(client) => {
-                client.render_frame();
+                let client = Rc::new(RefCell::new(client));
+                if let Err(error) = VoxygenWebClient::install_keyboard_controls(Rc::clone(&client))
+                {
+                    set_status("Original WorldSim terrain is rendering.", StatusState::Ok);
+                    set_detail(&format!(
+                        "{} Keyboard controls failed to attach: {error}",
+                        client.borrow().scene_summary()
+                    ));
+                } else {
+                    set_detail(&client.borrow().scene_summary());
+                }
+                client.borrow().render_frame();
                 set_status("Original WorldSim terrain is rendering.", StatusState::Ok);
-                set_detail(&client.scene_summary());
-                client.leak_for_browser_lifetime();
+                std::mem::forget(client);
             },
             Err(error) => {
                 set_status("Voxygen web scene failed.", StatusState::Error);
@@ -69,25 +81,30 @@ pub fn start() {
 }
 
 struct VoxygenWebClient {
-    canvas: HtmlCanvasElement,
+    _canvas: HtmlCanvasElement,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
+    _config: wgpu::SurfaceConfiguration,
     depth_view: wgpu::TextureView,
     terrain_pipeline: wgpu::RenderPipeline,
     terrain_vertex_buffer: wgpu::Buffer,
     terrain_index_buffer: wgpu::Buffer,
     terrain_index_count: u32,
-    camera_buffer: wgpu::Buffer,
+    _camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    world_preview: OriginalWorldPreview,
     world_mesh: OriginalWorldMesh,
+    keyboard_listener: Option<Closure<dyn FnMut(KeyboardEvent)>>,
 }
 
 impl VoxygenWebClient {
     async fn new() -> Result<Self, String> {
-        let world_mesh = world_preview::build_original_world_mesh()?;
-        set_detail("Original WorldSim mesh generated. Requesting browser WebGPU adapter...");
+        let world_preview = world_preview::build_original_world_preview()?;
+        let world_mesh = world_preview.generate_mesh(world_preview.initial_center_chunk_pos())?;
+        set_detail(
+            "Original WorldSim terrain patch generated. Requesting browser WebGPU adapter...",
+        );
 
         let window = web_window()?;
         let document = web_document(&window)?;
@@ -175,20 +192,42 @@ impl VoxygenWebClient {
             .map_err(|_| "terrain index count overflowed u32".to_owned())?;
 
         Ok(Self {
-            canvas,
+            _canvas: canvas,
             surface,
             device,
             queue,
-            config,
+            _config: config,
             depth_view,
             terrain_pipeline,
             terrain_vertex_buffer,
             terrain_index_buffer,
             terrain_index_count,
-            camera_buffer,
+            _camera_buffer: camera_buffer,
             camera_bind_group,
+            world_preview,
             world_mesh,
+            keyboard_listener: None,
         })
+    }
+
+    fn install_keyboard_controls(client: Rc<RefCell<Self>>) -> Result<(), String> {
+        let window = web_window()?;
+        let listener_client = Rc::clone(&client);
+        let listener = Closure::wrap(Box::new(move |event: KeyboardEvent| {
+            let Some(delta) = movement_delta(&event.key()) else {
+                return;
+            };
+            event.prevent_default();
+            if let Err(error) = listener_client.borrow_mut().move_preview_center(delta) {
+                set_status("Voxygen web scene failed.", StatusState::Error);
+                set_detail(&error);
+            }
+        }) as Box<dyn FnMut(KeyboardEvent)>);
+        window
+            .add_event_listener_with_callback("keydown", listener.as_ref().unchecked_ref())
+            .map_err(|_| "failed to attach keyboard controls".to_owned())?;
+        client.borrow_mut().keyboard_listener = Some(listener);
+        Ok(())
     }
 
     fn render_frame(&self) {
@@ -246,6 +285,54 @@ impl VoxygenWebClient {
         frame.present();
     }
 
+    fn move_preview_center(&mut self, delta: Vec2<i32>) -> Result<(), String> {
+        let current = Vec2::new(
+            self.world_mesh.center_chunk_pos.0,
+            self.world_mesh.center_chunk_pos.1,
+        );
+        let next = self.world_preview.clamp_center_chunk_pos(current + delta);
+        if next == current {
+            return Ok(());
+        }
+
+        set_status(
+            "Generating original WorldSim terrain chunks...",
+            StatusState::Loading,
+        );
+        let world_mesh = self.world_preview.generate_mesh(next)?;
+        self.upload_world_mesh(world_mesh)?;
+        self.render_frame();
+        set_status("Original WorldSim terrain is rendering.", StatusState::Ok);
+        set_detail(&self.scene_summary());
+        Ok(())
+    }
+
+    fn upload_world_mesh(&mut self, world_mesh: OriginalWorldMesh) -> Result<(), String> {
+        let terrain_vertex_buffer = create_buffer_with_data(
+            &self.device,
+            &f32_bytes(&world_mesh.vertices),
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            "Voxygen Web Terrain Vertex Buffer",
+        );
+        let terrain_index_buffer = create_buffer_with_data(
+            &self.device,
+            &u32_bytes(&world_mesh.indices),
+            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            "Voxygen Web Terrain Index Buffer",
+        );
+        let terrain_index_count = world_mesh
+            .indices
+            .len()
+            .try_into()
+            .map_err(|_| "terrain index count overflowed u32".to_owned())?;
+
+        self.terrain_vertex_buffer = terrain_vertex_buffer;
+        self.terrain_index_buffer = terrain_index_buffer;
+        self.terrain_index_count = terrain_index_count;
+        self.world_mesh = world_mesh;
+        Ok(())
+    }
+
     fn scene_summary(&self) -> String {
         let (chunks_x, chunks_y) = self.world_mesh.chunk_dimensions;
         let (patch_x, patch_y) = self.world_mesh.chunk_patch;
@@ -267,13 +354,6 @@ impl VoxygenWebClient {
             self.world_mesh.enabled_world_features,
             self.world_mesh.wildlife_spawn_manifests
         )
-    }
-
-    fn leak_for_browser_lifetime(self) {
-        let _ = self.canvas;
-        let _ = self.config;
-        let _ = self.camera_buffer;
-        Box::leak(Box::new(self));
     }
 }
 
@@ -398,6 +478,16 @@ fn camera_view_projection(aspect: f32, world_mesh: &OriginalWorldMesh) -> [f32; 
     let view = look_at_rh(eye, target, up);
     let projection = perspective_rh(50.0_f32.to_radians(), aspect.max(0.1), 0.1, 360.0);
     mul_mat4(projection, view)
+}
+
+fn movement_delta(key: &str) -> Option<Vec2<i32>> {
+    match key {
+        "ArrowUp" | "w" | "W" => Some(Vec2::new(0, -1)),
+        "ArrowDown" | "s" | "S" => Some(Vec2::new(0, 1)),
+        "ArrowLeft" | "a" | "A" => Some(Vec2::new(-1, 0)),
+        "ArrowRight" | "d" | "D" => Some(Vec2::new(1, 0)),
+        _ => None,
+    }
 }
 
 fn look_at_rh(eye: [f32; 3], target: [f32; 3], up: [f32; 3]) -> [f32; 16] {
