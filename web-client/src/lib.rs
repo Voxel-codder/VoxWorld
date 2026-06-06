@@ -54,6 +54,14 @@ enum ActionKind {
     Jump,
 }
 
+#[derive(Clone, Copy)]
+enum MoveDirection {
+    Forward,
+    Back,
+    Left,
+    Right,
+}
+
 impl InputState {
     const fn new() -> Self {
         Self {
@@ -118,6 +126,7 @@ pub fn start() -> Result<(), JsValue> {
     install_connect_handler(connect_button, server_url, status.clone())?;
     install_chat_handler(chat_form, chat_input, status)?;
     install_keyboard_handlers(&window)?;
+    install_touch_controls(&document)?;
     append_chat_line("system", "Session log ready");
 
     Ok(())
@@ -455,20 +464,21 @@ fn focused_text_field() -> bool {
 }
 
 fn update_key(key: &str, pressed: bool) -> bool {
-    INPUT.with(|input| {
-        let mut input = input.borrow_mut();
-        match key {
-            "w" | "W" | "ArrowUp" => input.forward = pressed,
-            "s" | "S" | "ArrowDown" => input.back = pressed,
-            "a" | "A" | "ArrowLeft" => input.left = pressed,
-            "d" | "D" | "ArrowRight" => input.right = pressed,
-            "e" | "E" | "PageUp" => input.up = pressed,
-            "q" | "Q" | "PageDown" => input.down = pressed,
-            _ => return false,
-        }
-
-        true
-    })
+    match key {
+        "w" | "W" | "ArrowUp" => set_movement(MoveDirection::Forward, pressed),
+        "s" | "S" | "ArrowDown" => set_movement(MoveDirection::Back, pressed),
+        "a" | "A" | "ArrowLeft" => set_movement(MoveDirection::Left, pressed),
+        "d" | "D" | "ArrowRight" => set_movement(MoveDirection::Right, pressed),
+        "e" | "E" | "PageUp" => {
+            INPUT.with(|input| input.borrow_mut().up = pressed);
+            true
+        },
+        "q" | "Q" | "PageDown" => {
+            INPUT.with(|input| input.borrow_mut().down = pressed);
+            true
+        },
+        _ => false,
+    }
 }
 
 fn action_for_key(key: &str) -> Option<ActionKind> {
@@ -480,6 +490,89 @@ fn action_for_key(key: &str) -> Option<ActionKind> {
         "k" | "K" => Some(ActionKind::Secondary),
         _ => None,
     }
+}
+
+fn install_touch_controls(document: &Document) -> Result<(), JsValue> {
+    install_movement_button(
+        element_by_id(document, "touch-forward")?,
+        MoveDirection::Forward,
+    )?;
+    install_movement_button(element_by_id(document, "touch-back")?, MoveDirection::Back)?;
+    install_movement_button(element_by_id(document, "touch-left")?, MoveDirection::Left)?;
+    install_movement_button(
+        element_by_id(document, "touch-right")?,
+        MoveDirection::Right,
+    )?;
+
+    install_action_button(
+        element_by_id(document, "touch-primary")?,
+        ActionKind::Primary,
+    )?;
+    install_action_button(
+        element_by_id(document, "touch-secondary")?,
+        ActionKind::Secondary,
+    )?;
+    install_action_button(element_by_id(document, "touch-jump")?, ActionKind::Jump)?;
+    install_action_button(element_by_id(document, "touch-roll")?, ActionKind::Roll)?;
+    install_action_button(element_by_id(document, "touch-block")?, ActionKind::Block)?;
+    Ok(())
+}
+
+fn install_movement_button(button: HtmlElement, direction: MoveDirection) -> Result<(), JsValue> {
+    let on_down = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+        event.prevent_default();
+        if set_movement(direction, true) {
+            send_input_state();
+        }
+    });
+    button.add_event_listener_with_callback("pointerdown", on_down.as_ref().unchecked_ref())?;
+    on_down.forget();
+
+    for event_name in ["pointerup", "pointercancel", "pointerleave"] {
+        let on_up = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            event.prevent_default();
+            if set_movement(direction, false) {
+                send_input_state();
+            }
+        });
+        button.add_event_listener_with_callback(event_name, on_up.as_ref().unchecked_ref())?;
+        on_up.forget();
+    }
+
+    Ok(())
+}
+
+fn install_action_button(button: HtmlElement, action: ActionKind) -> Result<(), JsValue> {
+    let on_down = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+        event.prevent_default();
+        send_action(action, true);
+    });
+    button.add_event_listener_with_callback("pointerdown", on_down.as_ref().unchecked_ref())?;
+    on_down.forget();
+
+    for event_name in ["pointerup", "pointercancel", "pointerleave"] {
+        let on_up = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            event.prevent_default();
+            send_action(action, false);
+        });
+        button.add_event_listener_with_callback(event_name, on_up.as_ref().unchecked_ref())?;
+        on_up.forget();
+    }
+
+    Ok(())
+}
+
+fn set_movement(direction: MoveDirection, pressed: bool) -> bool {
+    INPUT.with(|input| {
+        let mut input = input.borrow_mut();
+        match direction {
+            MoveDirection::Forward => input.forward = pressed,
+            MoveDirection::Back => input.back = pressed,
+            MoveDirection::Left => input.left = pressed,
+            MoveDirection::Right => input.right = pressed,
+        }
+    });
+    true
 }
 
 fn install_pointer_handlers(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {

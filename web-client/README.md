@@ -14,6 +14,7 @@ platform work can land without disturbing the production server or native client
 - Keyboard input forwarding for WASD, E/Q vertical movement, Space jump, Shift roll, and basic combat keys
 - Mouse and touch look-direction forwarding from the canvas
 - Mouse primary and secondary action forwarding from the canvas
+- On-screen touch movement and action controls for mobile browsers
 - Snapshot-driven canvas view for the player and nearby entities
 - Browser-persisted guest name passed through `/play?name=...`
 - Browser chat input and session event log over the `/play` transport

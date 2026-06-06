@@ -9,6 +9,22 @@
   <body>
     <canvas id="world-canvas" aria-label="Vox World web client canvas"></canvas>
 
+    <section class="touch-controls" aria-label="Touch controls">
+      <div class="move-pad" aria-label="Movement">
+        <button id="touch-forward" class="touch-button touch-button-up" type="button" aria-label="Move forward">↑</button>
+        <button id="touch-left" class="touch-button touch-button-left" type="button" aria-label="Move left">←</button>
+        <button id="touch-back" class="touch-button touch-button-down" type="button" aria-label="Move back">↓</button>
+        <button id="touch-right" class="touch-button touch-button-right" type="button" aria-label="Move right">→</button>
+      </div>
+      <div class="action-pad" aria-label="Actions">
+        <button id="touch-primary" class="touch-button touch-action-primary" type="button" aria-label="Primary action">Hit</button>
+        <button id="touch-secondary" class="touch-button" type="button" aria-label="Secondary action">Alt</button>
+        <button id="touch-jump" class="touch-button" type="button" aria-label="Jump">Jump</button>
+        <button id="touch-roll" class="touch-button" type="button" aria-label="Roll">Roll</button>
+        <button id="touch-block" class="touch-button" type="button" aria-label="Block">Block</button>
+      </div>
+    </section>
+
     <section class="connection-panel">
       <label for="player-name">Name</label>
       <div class="connection-row">
