@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use common::{
     comp::{Alignment, Body},
     generation::{EntityInfo, EntitySpawn, SpecialEntity},
-    spot::Spot,
     terrain::{Block, BlockKind, SpriteKind, TerrainChunk, TerrainChunkSize, sprite::Category},
     vol::{ReadVol, RectVolSize},
 };
@@ -12,9 +11,9 @@ use vek::{Vec2, Vec3};
 use veloren_world::{
     World,
     config::Features,
-    index::{Index, IndexOwned, IndexRef},
-    layer::spot::SpotGenerate,
-    sim::{FileOpts, GenOpts, WorldOpts, WorldSim},
+    index::{IndexOwned, IndexRef},
+    sim::{FileOpts, GenOpts, WorldOpts},
+    site::SiteKind,
 };
 
 pub const FLOATS_PER_VERTEX: usize = 6;
@@ -33,6 +32,10 @@ pub struct OriginalWorldPreview {
     dimensions: Vec2<u32>,
     enabled_world_features: usize,
     wildlife_spawn_manifests: usize,
+    original_sites: usize,
+    original_settlements: usize,
+    original_pois: usize,
+    start: PreviewStartLocation,
     seed: u32,
 }
 
@@ -55,6 +58,9 @@ pub struct OriginalWorldMesh {
     pub generated_entity_spawns: usize,
     pub enabled_world_features: usize,
     pub wildlife_spawn_manifests: usize,
+    pub original_sites: usize,
+    pub original_settlements: usize,
+    pub original_pois: usize,
     pub seed: u32,
 }
 
@@ -84,6 +90,12 @@ pub enum OriginalEntityMarkerShape {
     Object,
 }
 
+struct PreviewStartLocation {
+    center_chunk_pos: Vec2<i32>,
+    player_wpos: Vec2<f32>,
+    summary: String,
+}
+
 impl OriginalWorldPreview {
     pub fn new() -> Result<Self, String> {
         let threadpool = ThreadPoolBuilder::new()
@@ -91,7 +103,7 @@ impl OriginalWorldPreview {
             .use_current_thread()
             .build()
             .map_err(|error| format!("failed to create browser worldgen threadpool: {error}"))?;
-        let mut sim = WorldSim::generate(
+        let (world, index_owned) = World::generate(
             SEED,
             WorldOpts {
                 seed_elements: true,
@@ -105,18 +117,36 @@ impl OriginalWorldPreview {
             &threadpool,
             &|_| {},
         );
-        Spot::generate(&mut sim);
-        let dimensions = sim.get_size();
+        let dimensions = world.sim().get_size();
         if dimensions.x < 2 || dimensions.y < 2 {
             return Err("original WorldSim generated too few chunks for terrain mesh".to_owned());
         }
 
-        let world = World::from_sim_for_web_preview(sim);
-        let index_owned = IndexOwned::new(Index::new(SEED));
-        let index_ref = index_owned.as_index_ref();
-        let enabled_world_features = count_enabled_features(index_ref.features);
-        let wildlife_spawn_manifests = index_ref.wildlife_spawns.len();
-        let preview_features = terrain_chunk_preview_features(index_ref.features);
+        let (
+            enabled_world_features,
+            wildlife_spawn_manifests,
+            preview_features,
+            original_sites,
+            original_settlements,
+            original_pois,
+            start,
+        ) = {
+            let index_ref = index_owned.as_index_ref();
+            (
+                count_enabled_features(index_ref.features),
+                index_ref.wildlife_spawns.len(),
+                terrain_chunk_preview_features(index_ref.features),
+                world.civs().sites.values().len(),
+                world
+                    .civs()
+                    .sites
+                    .values()
+                    .filter(|site| site.is_settlement())
+                    .count(),
+                world.civs().pois.values().len(),
+                select_preview_start(&world, index_ref, dimensions),
+            )
+        };
 
         Ok(Self {
             world,
@@ -126,21 +156,19 @@ impl OriginalWorldPreview {
             dimensions,
             enabled_world_features,
             wildlife_spawn_manifests,
+            original_sites,
+            original_settlements,
+            original_pois,
+            start,
             seed: SEED,
         })
     }
 
-    pub fn initial_center_chunk_pos(&self) -> Vec2<i32> {
-        Vec2::new(self.dimensions.x as i32 / 2, self.dimensions.y as i32 / 2)
-    }
+    pub fn initial_center_chunk_pos(&self) -> Vec2<i32> { self.start.center_chunk_pos }
 
-    pub fn initial_player_wpos(&self) -> Vec2<f32> {
-        let rect_size = TerrainChunkSize::RECT_SIZE.as_::<f32>();
-        self.clamp_player_wpos(
-            chunk_center_wpos(self.initial_center_chunk_pos())
-                + Vec2::new(rect_size.x * 0.28, -rect_size.y * 0.22),
-        )
-    }
+    pub fn initial_player_wpos(&self) -> Vec2<f32> { self.start.player_wpos }
+
+    pub fn start_summary(&self) -> &str { &self.start.summary }
 
     pub fn center_chunk_for_wpos(&self, wpos: Vec2<f32>) -> Vec2<i32> {
         let rect_size = TerrainChunkSize::RECT_SIZE.as_::<f32>();
@@ -151,17 +179,7 @@ impl OriginalWorldPreview {
     }
 
     pub fn clamp_center_chunk_pos(&self, chunk_pos: Vec2<i32>) -> Vec2<i32> {
-        let max_world_x = self.dimensions.x.saturating_sub(1) as i32;
-        let max_world_y = self.dimensions.y.saturating_sub(1) as i32;
-        let min_x = CHUNK_RADIUS.min(max_world_x);
-        let min_y = CHUNK_RADIUS.min(max_world_y);
-        let max_x = (max_world_x - CHUNK_RADIUS).max(min_x);
-        let max_y = (max_world_y - CHUNK_RADIUS).max(min_y);
-
-        Vec2::new(
-            chunk_pos.x.clamp(min_x, max_x),
-            chunk_pos.y.clamp(min_y, max_y),
-        )
+        clamp_center_chunk_pos_to_dimensions(chunk_pos, self.dimensions)
     }
 
     pub fn clamp_player_wpos(&self, wpos: Vec2<f32>) -> Vec2<f32> {
@@ -249,6 +267,9 @@ impl OriginalWorldPreview {
             self.seed,
             self.enabled_world_features,
             self.wildlife_spawn_manifests,
+            self.original_sites,
+            self.original_settlements,
+            self.original_pois,
         )
     }
 
@@ -301,6 +322,132 @@ fn required_chunk_positions(center_chunk_pos: Vec2<i32>, dimensions: Vec2<u32>) 
         }
     }
     chunk_positions
+}
+
+fn select_preview_start(
+    world: &World,
+    index: IndexRef,
+    dimensions: Vec2<u32>,
+) -> PreviewStartLocation {
+    let fallback_center = clamp_center_chunk_pos_to_dimensions(
+        Vec2::new(dimensions.x as i32 / 2, dimensions.y as i32 / 2),
+        dimensions,
+    );
+    let fallback_wpos = chunk_center_wpos(fallback_center);
+
+    let Some(candidate) = world
+        .civs()
+        .sites
+        .iter()
+        .filter_map(|(_, civ_site)| {
+            let site_id = civ_site.site_tmp?;
+            let site = &index.sites[site_id];
+            let site_kind = site.kind.unwrap_or(civ_site.kind);
+            let town_priority = match site_kind {
+                SiteKind::Refactor => 3.0,
+                SiteKind::SavannahTown | SiteKind::CoastalTown | SiteKind::DesertCity => 2.0,
+                SiteKind::CliffTown => 1.5,
+                _ => return None,
+            };
+            let plot_count = site.plots().len();
+            let size_score = 1.0 / (1.0 + ((plot_count as f32 - 30.0).abs() / 30.0));
+            let center_score = {
+                let world_center = dimensions.as_::<f32>() * 0.5;
+                let distance = (civ_site.center.as_::<f32>() - world_center).magnitude();
+                let max_dimension = dimensions.x.max(dimensions.y) as f32;
+                1.0 - (distance / max_dimension).clamp(0.0, 1.0)
+            };
+            let player_wpos = site_start_wpos(site).unwrap_or_else(|| {
+                chunk_center_wpos(civ_site.center).map(|coord| coord.floor() as i32)
+            });
+            let center_chunk_pos =
+                clamp_center_chunk_pos_to_dimensions(chunk_pos_for_wpos(player_wpos), dimensions);
+            let score = town_priority * 4.0 + size_score * 2.0 + center_score;
+            let name = site.name().unwrap_or("unnamed site");
+            Some(PreviewStartCandidate {
+                center_chunk_pos,
+                player_wpos: player_wpos.as_::<f32>() + Vec2::broadcast(0.5),
+                score,
+                plot_count,
+                site_kind,
+                site_id: site_id.id(),
+                name: name.to_owned(),
+            })
+        })
+        .max_by(|a, b| a.score.total_cmp(&b.score))
+    else {
+        return PreviewStartLocation {
+            center_chunk_pos: fallback_center,
+            player_wpos: fallback_wpos,
+            summary: format!(
+                "fallback world center chunk {:?}",
+                chunk_key(fallback_center)
+            ),
+        };
+    };
+
+    PreviewStartLocation {
+        center_chunk_pos: candidate.center_chunk_pos,
+        player_wpos: clamp_player_wpos_to_dimensions(candidate.player_wpos, dimensions),
+        summary: format!(
+            "starting near original {:?} '{}' site {} with {} plots at chunk {:?}",
+            candidate.site_kind,
+            candidate.name,
+            candidate.site_id,
+            candidate.plot_count,
+            chunk_key(candidate.center_chunk_pos)
+        ),
+    }
+}
+
+struct PreviewStartCandidate {
+    center_chunk_pos: Vec2<i32>,
+    player_wpos: Vec2<f32>,
+    score: f32,
+    plot_count: usize,
+    site_kind: SiteKind,
+    site_id: u64,
+    name: String,
+}
+
+fn site_start_wpos(site: &veloren_world::site::Site) -> Option<Vec2<i32>> {
+    site.plazas()
+        .next()
+        .map(|plaza| site.tile_center_wpos(site.plot(plaza).root_tile()))
+        .or_else(|| {
+            site.plots()
+                .filter_map(|plot| plot.meta()?.door_tile())
+                .map(|door_tile| site.tile_center_wpos(door_tile))
+                .next()
+        })
+}
+
+fn chunk_pos_for_wpos(wpos: Vec2<i32>) -> Vec2<i32> {
+    let rect_size = TerrainChunkSize::RECT_SIZE.as_::<i32>();
+    Vec2::new(
+        wpos.x.div_euclid(rect_size.x),
+        wpos.y.div_euclid(rect_size.y),
+    )
+}
+
+fn clamp_center_chunk_pos_to_dimensions(chunk_pos: Vec2<i32>, dimensions: Vec2<u32>) -> Vec2<i32> {
+    let max_world_x = dimensions.x.saturating_sub(1) as i32;
+    let max_world_y = dimensions.y.saturating_sub(1) as i32;
+    let min_x = CHUNK_RADIUS.min(max_world_x);
+    let min_y = CHUNK_RADIUS.min(max_world_y);
+    let max_x = (max_world_x - CHUNK_RADIUS).max(min_x);
+    let max_y = (max_world_y - CHUNK_RADIUS).max(min_y);
+
+    Vec2::new(
+        chunk_pos.x.clamp(min_x, max_x),
+        chunk_pos.y.clamp(min_y, max_y),
+    )
+}
+
+fn clamp_player_wpos_to_dimensions(wpos: Vec2<f32>, dimensions: Vec2<u32>) -> Vec2<f32> {
+    let rect_size = TerrainChunkSize::RECT_SIZE.as_::<f32>();
+    let max = dimensions.as_::<f32>() * rect_size - Vec2::broadcast(1.0);
+    Vec2::new(wpos.x.clamp(0.0, max.x), wpos.y.clamp(0.0, max.y))
 }
 
 fn chunk_key(chunk_pos: Vec2<i32>) -> (i32, i32) { (chunk_pos.x, chunk_pos.y) }
@@ -489,6 +636,9 @@ fn mesh_from_terrain_chunks(
     seed: u32,
     enabled_world_features: usize,
     wildlife_spawn_manifests: usize,
+    original_sites: usize,
+    original_settlements: usize,
+    original_pois: usize,
 ) -> Result<OriginalWorldMesh, String> {
     if chunks.is_empty() {
         return Err("original WorldSim generated no preview chunks".to_owned());
@@ -568,6 +718,9 @@ fn mesh_from_terrain_chunks(
         generated_entity_spawns,
         enabled_world_features,
         wildlife_spawn_manifests,
+        original_sites,
+        original_settlements,
+        original_pois,
         seed,
     })
 }

@@ -635,20 +635,24 @@ impl VoxygenWebClient {
         let (chunks_x, chunks_y) = self.world_mesh.chunk_dimensions;
         let (patch_x, patch_y) = self.world_mesh.chunk_patch;
         format!(
-            "Seed {} rendered {} original TerrainChunks in a {}x{} patch around {:?} inside a \
-             {}x{} WorldSim. New chunks/meshes this update: {}/{}. Chunk/mesh cache: {}/{}. GPU \
-             chunk buffers: {}/{}. Player block position: ({:.1}, {:.1}). Player terrain z: \
-             {:.1}. Player facing: {:.0} deg. Blocked terrain moves: {}. WebGPU block faces: {}. \
-             Filled blocks: {}. Liquid blocks: {}. Terrain sprite props: {}. Visible entity \
-             markers: {}. Entity spawns: {}. World features loaded: {}. Wildlife spawn manifests: \
-             {}. {}{}",
+            "Seed {} {}. Rendered {} original TerrainChunks in a {}x{} patch around {:?} inside a \
+             {}x{} WorldSim. Original sites/settlements/POIs: {}/{}/{}. New chunks/meshes this \
+             update: {}/{}. Chunk/mesh cache: {}/{}. GPU chunk buffers: {}/{}. Player block \
+             position: ({:.1}, {:.1}). Player terrain z: {:.1}. Player facing: {:.0} deg. Blocked \
+             terrain moves: {}. WebGPU block faces: {}. Filled blocks: {}. Liquid blocks: {}. \
+             Terrain sprite props: {}. Visible entity markers: {}. Entity spawns: {}. World \
+             features loaded: {}. Wildlife spawn manifests: {}. {}{}",
             self.world_mesh.seed,
+            self.world_preview.start_summary(),
             self.world_mesh.generated_chunks,
             patch_x,
             patch_y,
             self.world_mesh.center_chunk_pos,
             chunks_x,
             chunks_y,
+            self.world_mesh.original_sites,
+            self.world_mesh.original_settlements,
+            self.world_mesh.original_pois,
             self.world_mesh.newly_generated_chunks,
             self.world_mesh.newly_meshed_chunks,
             self.world_mesh.cached_chunks,

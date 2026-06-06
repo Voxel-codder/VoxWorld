@@ -26,11 +26,14 @@ fn main() -> io::Result<()> {
     );
     println!(
         "cargo:rerun-if-changed={}",
-        assets_root.join("common").join("canary.canary").display()
+        assets_root.join("common").display()
     );
 
     let mut files = Vec::new();
-    collect_embedded_world_files(&assets_root.join("world"), &mut files)?;
+    collect_embedded_files_with_extensions(&assets_root.join("world"), &mut files, &[
+        "ron", "vox",
+    ])?;
+    collect_embedded_files_with_extensions(&assets_root.join("common"), &mut files, &["ron"])?;
     files.push(assets_root.join("common").join("canary.canary"));
     files.sort();
 
@@ -89,15 +92,19 @@ fn main() -> io::Result<()> {
     fs::write(generated_path, output)
 }
 
-fn collect_embedded_world_files(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
+fn collect_embedded_files_with_extensions(
+    dir: &Path,
+    files: &mut Vec<PathBuf>,
+    extensions: &[&str],
+) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
         if path.is_dir() {
-            collect_embedded_world_files(&path, files)?;
+            collect_embedded_files_with_extensions(&path, files, extensions)?;
         } else if path
             .extension()
             .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| matches!(ext, "ron" | "vox"))
+            .is_some_and(|ext| extensions.contains(&ext))
         {
             files.push(path);
         }

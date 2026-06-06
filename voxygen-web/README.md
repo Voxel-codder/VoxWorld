@@ -15,11 +15,17 @@ Current milestone:
   `common-assets` source;
 - embed the original world `.vox` structure assets needed by terrain
   decorations;
-- generate a small original `WorldSim` in the browser build path;
-- run original spot placement and enable terrain decorations, trees, shrubs, and
-  spot structures in the generated preview chunk;
-- keep the generated original `World` and index data alive in the browser so
-  new terrain patches can be generated without rebuilding the whole simulation;
+- embed original common RON assets so browser world generation can load economy,
+  profession, trading, item, recipe, ability, and NPC metadata;
+- generate a small original `World` in the browser build path using the real
+  civ/site/economy/spot generation pipeline instead of only a terrain-only
+  `WorldSim`;
+- choose the browser preview's initial player/chunk position from the generated
+  original settlement sites so the first frame lands near a real town instead
+  of an arbitrary world-center terrain patch;
+- keep the generated original `World`, civ/site data, and index data alive in
+  the browser so new terrain patches can be generated without rebuilding the
+  whole simulation;
 - call the real `World::generate_chunk` path for a 5x5 patch around the preview
   camera and convert the generated `TerrainChunk` blocks into a merged WebGPU
   3D block-face mesh with a camera, vertex/index buffers, and depth testing;
@@ -52,6 +58,8 @@ Current milestone:
 - handle browser-side `E`/`Enter` interaction requests against the cached
   original terrain prop and entity targets, including range checks and a
   persistent last-interaction status line;
+- report original site, settlement, POI, and selected starting-site metadata in
+  the browser status panel for validation;
 - preserve original `EntityInfo.body` categories in the web preview and render
   body-aware temporary silhouettes for humanoid, quadruped, flyer, fish, large,
   and object entities;
@@ -66,6 +74,8 @@ Next milestones:
   and atlas/material pipeline;
 - replace entity and player temporary silhouettes with Voxygen body meshes,
   loadouts, and animation state;
+- surface original rtsim/site NPCs, traders, and market interaction state in the
+  browser scene instead of only chunk supplement entity spawns;
 - replace the visible 5x5 GPU chunk-buffer set with fully streamed loading,
   eviction, and independent chunk draw management around the live player
   position;
