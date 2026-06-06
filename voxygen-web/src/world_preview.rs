@@ -153,6 +153,7 @@ struct OriginalSiteMarker {
     label: &'static str,
     site_name: String,
     trade_preview: Option<TradePreview>,
+    yaw_radians: f32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -832,8 +833,17 @@ fn site_marker_at_plot(
     trade_preview: Option<TradePreview>,
 ) -> OriginalSiteMarker {
     let wpos2d = site.tile_center_wpos(tile);
+    let tile_center = wpos2d.as_::<f32>();
+    let marker_wpos2d = tile_center + offset;
+    let facing_target = if offset != Vec2::zero() {
+        tile_center
+    } else {
+        site_start_wpos(site)
+            .map(|start| start.as_::<f32>())
+            .unwrap_or(tile_center)
+    };
     OriginalSiteMarker {
-        wpos: (wpos2d.as_::<f32>() + offset).with_z(
+        wpos: marker_wpos2d.with_z(
             sim.get_alt_approx(wpos2d)
                 .unwrap_or_else(|| sim.get_surface_alt_approx(wpos2d))
                 + 1.0,
@@ -842,6 +852,7 @@ fn site_marker_at_plot(
         label,
         site_name: site_name.to_owned(),
         trade_preview,
+        yaw_radians: site_marker_yaw(kind, tile, marker_wpos2d, facing_target),
     }
 }
 
@@ -1968,7 +1979,7 @@ fn entity_marker(
         height,
         color: entity_marker_color(entity),
         shape,
-        yaw_radians: 0.0,
+        yaw_radians: entity_marker_yaw(entity),
     }
 }
 
@@ -1994,8 +2005,87 @@ fn site_marker_to_entity_marker(
         height,
         color: site_marker_color(marker.kind),
         shape,
-        yaw_radians: 0.0,
+        yaw_radians: marker.yaw_radians,
     }
+}
+
+fn site_marker_yaw(
+    kind: OriginalSiteMarkerKind,
+    tile: Vec2<i32>,
+    marker_wpos: Vec2<f32>,
+    facing_target: Vec2<f32>,
+) -> f32 {
+    if vec2_distance_squared(marker_wpos, facing_target) > 0.25 {
+        return yaw_towards(marker_wpos, facing_target);
+    }
+
+    stable_yaw_from_seed(
+        tile.x as f32 * 19.733 + tile.y as f32 * 43.119 + site_marker_kind_yaw_bias(kind),
+    )
+}
+
+fn site_marker_kind_yaw_bias(kind: OriginalSiteMarkerKind) -> f32 {
+    match kind {
+        OriginalSiteMarkerKind::Trader => 0.0,
+        OriginalSiteMarkerKind::Guard => 3.0,
+        OriginalSiteMarkerKind::Captain => 7.0,
+        OriginalSiteMarkerKind::Adventurer => 11.0,
+        OriginalSiteMarkerKind::Market => 17.0,
+    }
+}
+
+fn entity_marker_yaw(entity: &EntityInfo) -> f32 {
+    stable_yaw_from_seed(
+        entity.pos.x * 12.989_8
+            + entity.pos.y * 78.233
+            + entity.pos.z * 37.719
+            + entity.scale * 11.17
+            + entity_alignment_yaw_bias(entity.alignment)
+            + entity_body_yaw_bias(&entity.body),
+    )
+}
+
+fn entity_alignment_yaw_bias(alignment: Alignment) -> f32 {
+    match alignment {
+        Alignment::Enemy => 5.0,
+        Alignment::Npc => 13.0,
+        Alignment::Tame | Alignment::Owned(_) => 29.0,
+        Alignment::Passive => 31.0,
+        Alignment::Wild => 37.0,
+    }
+}
+
+fn entity_body_yaw_bias(body: &Body) -> f32 {
+    match body {
+        Body::Humanoid(_) => 0.0,
+        Body::BipedSmall(_) => 2.0,
+        Body::BipedLarge(_) => 4.0,
+        Body::QuadrupedSmall(_) => 6.0,
+        Body::QuadrupedMedium(_) => 8.0,
+        Body::QuadrupedLow(_) => 10.0,
+        Body::Theropod(_) => 12.0,
+        Body::BirdMedium(_) => 14.0,
+        Body::BirdLarge(_) => 16.0,
+        Body::Dragon(_) => 18.0,
+        Body::FishSmall(_) => 20.0,
+        Body::FishMedium(_) => 22.0,
+        Body::Golem(_) => 24.0,
+        Body::Object(_) => 26.0,
+        Body::Item(_) => 28.0,
+        Body::Ship(_) => 30.0,
+        Body::Crustacean(_) => 32.0,
+        Body::Arthropod(_) => 34.0,
+        Body::Plugin(_) => 36.0,
+    }
+}
+
+fn yaw_towards(from: Vec2<f32>, to: Vec2<f32>) -> f32 {
+    let delta = to - from;
+    delta.y.atan2(delta.x)
+}
+
+fn stable_yaw_from_seed(seed: f32) -> f32 {
+    (seed.sin() * 43_758.547).rem_euclid(1.0) * std::f32::consts::TAU
 }
 
 fn site_marker_color(kind: OriginalSiteMarkerKind) -> [f32; 3] {

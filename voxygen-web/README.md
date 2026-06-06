@@ -104,6 +104,9 @@ Current milestone:
   and object entities;
 - store marker yaw and rotate temporary player/entity silhouette parts so the
   browser-side player visibly faces the last intended movement direction;
+- orient generated entity and site NPC/trader/market markers with stable yaw
+  derived from original spawn positions and settlement plot positions instead
+  of rendering every temporary silhouette at yaw 0;
 - keep this as the stable place for future Voxygen renderer/HUD migration;
 - avoid extending the temporary 2D canvas client as if it were the final game.
 
@@ -111,8 +114,8 @@ Next milestones:
 
 - replace the temporary block-face mesh with Voxygen's real greedy terrain mesh
   and atlas/material pipeline;
-- replace entity and player temporary silhouettes with Voxygen body meshes,
-  loadouts, and animation state;
+- replace oriented entity and player temporary silhouettes with Voxygen body
+  meshes, loadouts, and animation state;
 - replace the temporary rtsim-style profession roster markers with direct
   original rtsim NPC agents, profession inventories, dialogue, and loaded-agent
   state;
