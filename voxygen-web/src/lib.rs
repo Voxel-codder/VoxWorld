@@ -183,7 +183,7 @@ impl InputState {
 
 impl VoxygenWebClient {
     async fn new() -> Result<Self, String> {
-        let world_preview = world_preview::build_original_world_preview()?;
+        let mut world_preview = world_preview::build_original_world_preview()?;
         let center_chunk_pos = world_preview.initial_center_chunk_pos();
         let player_wpos = world_preview.initial_player_wpos();
         let world_mesh = world_preview.generate_mesh(center_chunk_pos)?;
@@ -542,10 +542,11 @@ impl VoxygenWebClient {
         let (chunks_x, chunks_y) = self.world_mesh.chunk_dimensions;
         let (patch_x, patch_y) = self.world_mesh.chunk_patch;
         format!(
-            "Seed {} generated {} original TerrainChunks in a {}x{} patch around {:?} inside a \
-             {}x{} WorldSim. Player block position: ({:.1}, {:.1}). WebGPU block faces: {}. \
-             Filled blocks: {}. Liquid blocks: {}. Visible entity markers: {}. Entity spawns: {}. \
-             World features loaded: {}. Wildlife spawn manifests: {}.",
+            "Seed {} rendered {} original TerrainChunks in a {}x{} patch around {:?} inside a \
+             {}x{} WorldSim. New chunks this update: {}. Chunk cache: {}. Player block position: \
+             ({:.1}, {:.1}). WebGPU block faces: {}. Filled blocks: {}. Liquid blocks: {}. \
+             Visible entity markers: {}. Entity spawns: {}. World features loaded: {}. Wildlife \
+             spawn manifests: {}.",
             self.world_mesh.seed,
             self.world_mesh.generated_chunks,
             patch_x,
@@ -553,6 +554,8 @@ impl VoxygenWebClient {
             self.world_mesh.center_chunk_pos,
             chunks_x,
             chunks_y,
+            self.world_mesh.newly_generated_chunks,
+            self.world_mesh.cached_chunks,
             self.player.wpos.x,
             self.player.wpos.y,
             self.world_mesh.terrain_faces,

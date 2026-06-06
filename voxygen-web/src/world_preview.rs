@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use common::{
     comp::{Alignment, Body},
     generation::{EntityInfo, EntitySpawn, SpecialEntity},
@@ -25,6 +27,7 @@ pub struct OriginalWorldPreview {
     world: World,
     index_owned: IndexOwned,
     preview_features: Features,
+    chunk_cache: HashMap<(i32, i32), GeneratedPreviewChunk>,
     dimensions: Vec2<u32>,
     enabled_world_features: usize,
     wildlife_spawn_manifests: usize,
@@ -40,6 +43,8 @@ pub struct OriginalWorldMesh {
     pub chunk_patch: (u32, u32),
     pub vertical_origin: f32,
     pub generated_chunks: usize,
+    pub newly_generated_chunks: usize,
+    pub cached_chunks: usize,
     pub terrain_faces: usize,
     pub filled_blocks: usize,
     pub liquid_blocks: usize,
@@ -106,6 +111,7 @@ impl OriginalWorldPreview {
             world,
             index_owned,
             preview_features,
+            chunk_cache: HashMap::new(),
             dimensions,
             enabled_world_features,
             wildlife_spawn_manifests,
@@ -170,49 +176,78 @@ impl OriginalWorldPreview {
         ]
     }
 
-    pub fn generate_mesh(&self, center_chunk_pos: Vec2<i32>) -> Result<OriginalWorldMesh, String> {
+    pub fn generate_mesh(
+        &mut self,
+        center_chunk_pos: Vec2<i32>,
+    ) -> Result<OriginalWorldMesh, String> {
         let center_chunk_pos = self.clamp_center_chunk_pos(center_chunk_pos);
-        let index_ref = self.index_owned.as_index_ref();
-        let preview_index = IndexRef {
-            features: &self.preview_features,
-            ..index_ref
-        };
-        let mut preview_chunks = Vec::new();
-        for y in -CHUNK_RADIUS..=CHUNK_RADIUS {
-            for x in -CHUNK_RADIUS..=CHUNK_RADIUS {
-                let chunk_pos = center_chunk_pos + Vec2::new(x, y);
-                if chunk_pos.x < 0
-                    || chunk_pos.y < 0
-                    || chunk_pos.x >= self.dimensions.x as i32
-                    || chunk_pos.y >= self.dimensions.y as i32
-                {
-                    continue;
-                }
-                let (terrain_chunk, supplement) = self
-                    .world
-                    .generate_chunk(preview_index, chunk_pos, None, || false, None)
+        let required_chunk_positions = required_chunk_positions(center_chunk_pos, self.dimensions);
+        let mut newly_generated_chunks = 0usize;
+
+        for chunk_pos in &required_chunk_positions {
+            let key = chunk_key(*chunk_pos);
+            if self.chunk_cache.contains_key(&key) {
+                continue;
+            }
+
+            let (terrain_chunk, supplement) = {
+                let index_ref = self.index_owned.as_index_ref();
+                let preview_index = IndexRef {
+                    features: &self.preview_features,
+                    ..index_ref
+                };
+                self.world
+                    .generate_chunk(preview_index, *chunk_pos, None, || false, None)
                     .map_err(|_| {
                         format!("original World::generate_chunk cancelled at {chunk_pos:?}")
-                    })?;
-                preview_chunks.push(GeneratedPreviewChunk {
-                    pos: chunk_pos,
-                    chunk: terrain_chunk,
-                    entity_spawns: supplement.entity_spawns,
-                });
-            }
+                    })?
+            };
+            self.chunk_cache.insert(key, GeneratedPreviewChunk {
+                pos: *chunk_pos,
+                chunk: terrain_chunk,
+                entity_spawns: supplement.entity_spawns,
+            });
+            newly_generated_chunks += 1;
         }
+
+        let preview_chunks = required_chunk_positions
+            .iter()
+            .filter_map(|chunk_pos| self.chunk_cache.get(&chunk_key(*chunk_pos)))
+            .collect::<Vec<_>>();
 
         mesh_from_terrain_chunks(
             &preview_chunks,
             self.dimensions,
             center_chunk_pos,
             CHUNK_RADIUS,
+            newly_generated_chunks,
+            self.chunk_cache.len(),
             self.seed,
             self.enabled_world_features,
             self.wildlife_spawn_manifests,
         )
     }
 }
+
+fn required_chunk_positions(center_chunk_pos: Vec2<i32>, dimensions: Vec2<u32>) -> Vec<Vec2<i32>> {
+    let mut chunk_positions = Vec::new();
+    for y in -CHUNK_RADIUS..=CHUNK_RADIUS {
+        for x in -CHUNK_RADIUS..=CHUNK_RADIUS {
+            let chunk_pos = center_chunk_pos + Vec2::new(x, y);
+            if chunk_pos.x < 0
+                || chunk_pos.y < 0
+                || chunk_pos.x >= dimensions.x as i32
+                || chunk_pos.y >= dimensions.y as i32
+            {
+                continue;
+            }
+            chunk_positions.push(chunk_pos);
+        }
+    }
+    chunk_positions
+}
+
+fn chunk_key(chunk_pos: Vec2<i32>) -> (i32, i32) { (chunk_pos.x, chunk_pos.y) }
 
 pub fn build_original_world_preview() -> Result<OriginalWorldPreview, String> {
     OriginalWorldPreview::new()
@@ -243,10 +278,12 @@ struct GeneratedPreviewChunk {
 }
 
 fn mesh_from_terrain_chunks(
-    chunks: &[GeneratedPreviewChunk],
+    chunks: &[&GeneratedPreviewChunk],
     dimensions: Vec2<u32>,
     center_chunk_pos: Vec2<i32>,
     chunk_radius: i32,
+    newly_generated_chunks: usize,
+    cached_chunks: usize,
     seed: u32,
     enabled_world_features: usize,
     wildlife_spawn_manifests: usize,
@@ -320,6 +357,8 @@ fn mesh_from_terrain_chunks(
         chunk_patch: (patch_side, patch_side),
         vertical_origin,
         generated_chunks: chunks.len(),
+        newly_generated_chunks,
+        cached_chunks,
         terrain_faces: builder.face_count,
         filled_blocks,
         liquid_blocks,

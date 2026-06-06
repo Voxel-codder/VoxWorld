@@ -23,6 +23,8 @@ Current milestone:
 - call the real `World::generate_chunk` path for a 5x5 patch around the preview
   camera and convert the generated `TerrainChunk` blocks into a merged WebGPU
   3D block-face mesh with a camera, vertex/index buffers, and depth testing;
+- cache generated original `TerrainChunk` data and supplements so moving across
+  chunk boundaries only generates newly visible chunks;
 - track a browser-side player block position with continuous keyboard movement,
   update the camera every animation frame, and upload a regenerated terrain
   patch when the player crosses a chunk boundary;
@@ -42,8 +44,8 @@ Next milestones:
   and atlas/material pipeline;
 - replace entity and player temporary silhouettes with Voxygen body meshes,
   loadouts, and animation state;
-- replace the regenerated 5x5 patch with incremental chunk streaming around the
-  live player position;
+- replace the cached 5x5 patch remesh with fully incremental chunk streaming
+  around the live player position;
 - attach player/session state so the scene follows the live character instead
   of a fixed terrain camera;
 - introduce a browser-safe client transport that maps Voxygen networking onto a
