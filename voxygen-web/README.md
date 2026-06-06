@@ -84,6 +84,10 @@ Current milestone:
 - build preview player/merchant `Inventory` values from the displayed wares and
   coins, then route preview offers through original `TradeAction::AddItem`
   processing so offer quantities are clamped by real inventory slot contents;
+- when both preview parties accept, atomically commit the completed browser-side
+  trade against cloned player/merchant `Inventory` values using original
+  `Inventory::take_amount` and `Inventory::push_all` item transfer paths, then
+  display the resulting inventory slot counts;
 - preserve original `EntityInfo.body` categories in the web preview and render
   body-aware temporary silhouettes for humanoid, quadruped, flyer, fish, large,
   and object entities;
@@ -101,7 +105,7 @@ Next milestones:
 - replace the temporary rtsim-style profession roster markers with direct
   original rtsim NPC agents, profession inventories, dialogue, and loaded-agent
   state;
-- replace the browser-side pending-trade preview panel with the real Voxygen
+- replace the browser-side committed-trade preview panel with the real Voxygen
   trade HUD and server-authoritative trade actions against live inventories;
 - replace the visible 5x5 GPU chunk-buffer set with fully streamed loading,
   eviction, and independent chunk draw management around the live player

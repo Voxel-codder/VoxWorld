@@ -2,11 +2,22 @@
 
 mod world_preview;
 
-use std::{cell::RefCell, collections::HashMap, num::NonZeroU64, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    num::{NonZeroU32, NonZeroU64},
+    rc::Rc,
+};
 
 use common::{
-    comp::{Inventory, Item, inventory::slot::InvSlotId},
-    trade::{PendingTrade, TradeAction, TradePhase},
+    comp::{
+        Inventory, Item,
+        inventory::{
+            item::{AbilityMap, MaterialStatManifest},
+            slot::InvSlotId,
+        },
+    },
+    trade::{PendingTrade, TradeAction, TradePhase, TradeResult},
     uid::Uid,
 };
 use vek::Vec2;
@@ -298,6 +309,7 @@ struct PreviewTradeSession {
     model: PendingTrade,
     player_inventory: Inventory,
     merchant_inventory: Inventory,
+    commit_result: Option<TradeResult>,
     selected_wares: Vec<usize>,
 }
 
@@ -309,6 +321,7 @@ impl PreviewTradeSession {
             model: PendingTrade::new(preview_trade_uid(1), preview_trade_uid(2)),
             player_inventory,
             merchant_inventory,
+            commit_result: None,
             selected_wares: Vec::new(),
         }
     }
@@ -327,12 +340,16 @@ impl PreviewTradeSession {
     }
 
     fn clear_offer(&mut self) {
+        if self.model.phase() != TradePhase::Mutate {
+            return;
+        }
         self.selected_wares.clear();
         self.model = PendingTrade::new(preview_trade_uid(1), preview_trade_uid(2));
+        self.commit_result = None;
     }
 
     fn accept(&mut self) {
-        if self.model.phase() == TradePhase::Complete || self.selected_wares.is_empty() {
+        if self.commit_result.is_some() || self.selected_wares.is_empty() {
             return;
         }
         let phase = self.model.phase();
@@ -340,6 +357,13 @@ impl PreviewTradeSession {
             .process_trade_action(0, TradeAction::Accept(phase), &[]);
         self.model
             .process_trade_action(1, TradeAction::Accept(phase), &[]);
+        if self.model.should_commit() {
+            self.commit_result = Some(commit_preview_trade(
+                &self.model,
+                &mut self.player_inventory,
+                &mut self.merchant_inventory,
+            ));
+        }
     }
 
     fn player_coin_offer(&self) -> f32 {
@@ -372,8 +396,15 @@ impl PreviewTradeSession {
 
     fn merchant_offer_slots(&self) -> usize { self.model.offers[1].len() }
 
+    fn player_inventory_slots(&self) -> usize { populated_inventory_slots(&self.player_inventory) }
+
+    fn merchant_inventory_slots(&self) -> usize {
+        populated_inventory_slots(&self.merchant_inventory)
+    }
+
     fn sync_model_offers(&mut self) {
         self.model = PendingTrade::new(preview_trade_uid(1), preview_trade_uid(2));
+        self.commit_result = None;
         if self.selected_wares.is_empty() {
             return;
         }
@@ -420,6 +451,75 @@ fn preview_trade_inventories(panel: &TradePanelPreview) -> (Inventory, Inventory
 
     (player_inventory, merchant_inventory)
 }
+
+fn commit_preview_trade(
+    trade: &PendingTrade,
+    player_inventory: &mut Inventory,
+    merchant_inventory: &mut Inventory,
+) -> TradeResult {
+    if !trade.should_commit()
+        || !trade_offers_are_valid(&trade.offers[0], player_inventory)
+        || !trade_offers_are_valid(&trade.offers[1], merchant_inventory)
+    {
+        return TradeResult::Declined;
+    }
+
+    let ability_map = AbilityMap::load().read();
+    let msm = MaterialStatManifest::load().read();
+    let mut next_player_inventory = player_inventory.clone();
+    let mut next_merchant_inventory = merchant_inventory.clone();
+    let mut player_items = Vec::new();
+    let mut merchant_items = Vec::new();
+
+    for (slot, quantity) in &trade.offers[0] {
+        let Some(quantity) = NonZeroU32::new(*quantity) else {
+            return TradeResult::Declined;
+        };
+        let Some(item) = next_player_inventory.take_amount(*slot, quantity, &ability_map, &msm)
+        else {
+            return TradeResult::Declined;
+        };
+        player_items.push(item);
+    }
+    for (slot, quantity) in &trade.offers[1] {
+        let Some(quantity) = NonZeroU32::new(*quantity) else {
+            return TradeResult::Declined;
+        };
+        let Some(item) = next_merchant_inventory.take_amount(*slot, quantity, &ability_map, &msm)
+        else {
+            return TradeResult::Declined;
+        };
+        merchant_items.push(item);
+    }
+
+    if next_merchant_inventory
+        .push_all(player_items.into_iter())
+        .is_err()
+        || next_player_inventory
+            .push_all(merchant_items.into_iter())
+            .is_err()
+    {
+        return TradeResult::NotEnoughSpace;
+    }
+
+    *player_inventory = next_player_inventory;
+    *merchant_inventory = next_merchant_inventory;
+    TradeResult::Completed
+}
+
+fn trade_offers_are_valid<'a>(
+    offers: impl IntoIterator<Item = (&'a InvSlotId, &'a u32)>,
+    inventory: &Inventory,
+) -> bool {
+    offers.into_iter().all(|(slot, quantity)| {
+        *quantity > 0
+            && inventory
+                .get(*slot)
+                .is_some_and(|item| item.amount() >= *quantity)
+    })
+}
+
+fn populated_inventory_slots(inventory: &Inventory) -> usize { inventory.slots().flatten().count() }
 
 fn camera_forward_world() -> Vec2<f32> {
     normalize2(Vec2::new(CAMERA_FORWARD_WORLD[0], CAMERA_FORWARD_WORLD[1]))
@@ -1805,17 +1905,32 @@ fn trade_balance_summary(session: &PreviewTradeSession) -> String {
         ),
         TradePhase::Review => format!(
             "Reviewing: player pays {} for {} item(s), merchant sell value {} (PendingTrade \
-             Review)",
+             Review; player slots {}, merchant slots {})",
             format_coin_amount(session.player_coin_offer()),
             session.selected_wares.len(),
-            format_coin_amount(session.merchant_sell_value())
+            format_coin_amount(session.merchant_sell_value()),
+            session.player_inventory_slots(),
+            session.merchant_inventory_slots()
         ),
         TradePhase::Complete => format!(
-            "Preview complete: {} item(s) for {}, merchant sell value {} (PendingTrade Complete)",
+            "Preview complete: {} item(s) for {}, merchant sell value {} (PendingTrade Complete; \
+             inventory commit {}; player slots {}, merchant slots {})",
             session.selected_wares.len(),
             format_coin_amount(session.player_coin_offer()),
-            format_coin_amount(session.merchant_sell_value())
+            format_coin_amount(session.merchant_sell_value()),
+            trade_result_label(session.commit_result.as_ref()),
+            session.player_inventory_slots(),
+            session.merchant_inventory_slots()
         ),
+    }
+}
+
+fn trade_result_label(result: Option<&TradeResult>) -> &'static str {
+    match result {
+        Some(TradeResult::Completed) => "completed",
+        Some(TradeResult::Declined) => "declined",
+        Some(TradeResult::NotEnoughSpace) => "not enough space",
+        None => "pending",
     }
 }
 
