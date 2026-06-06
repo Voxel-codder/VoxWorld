@@ -12,6 +12,7 @@ thread_local! {
     static SOCKET: RefCell<Option<WebSocket>> = const { RefCell::new(None) };
     static INPUT: RefCell<InputState> = const { RefCell::new(InputState::new()) };
     static LAST_SNAPSHOT: RefCell<Option<SnapshotView>> = const { RefCell::new(None) };
+    static LAST_SESSION_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
     static CHAT_LOG: RefCell<Option<HtmlElement>> = const { RefCell::new(None) };
 }
 
@@ -198,6 +199,7 @@ fn install_connect_handler(
     let on_click = Closure::<dyn FnMut(Event)>::new(move |_| {
         let url = server_url.value();
         status.set_text_content(Some("Connecting..."));
+        clear_session_error();
         close_existing_socket("reconnect");
 
         match WebSocket::new(&url) {
@@ -248,7 +250,9 @@ fn attach_socket_handlers(socket: &WebSocket, status: HtmlElement) {
     let close_socket = socket.clone();
     let on_close = Closure::<dyn FnMut(CloseEvent)>::new(move |event: CloseEvent| {
         let reason = if event.reason().is_empty() {
-            "Connection closed".to_owned()
+            last_session_error()
+                .map(|error| format!("Connection closed: {error}"))
+                .unwrap_or_else(|| "Connection closed".to_owned())
         } else {
             format!("Connection closed: {}", event.reason())
         };
@@ -324,6 +328,7 @@ fn summarize_server_message(data: &JsValue) -> String {
         Some("error") => {
             let message =
                 string_property(&value, "message").unwrap_or_else(|| "unknown error".to_owned());
+            remember_session_error(&message);
             append_chat_line("error", &message);
             format!("Session error: {message}")
         },
@@ -340,6 +345,20 @@ fn summarize_server_message(data: &JsValue) -> String {
         _ => "Session message received".to_owned(),
     }
 }
+
+fn clear_session_error() {
+    LAST_SESSION_ERROR.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+}
+
+fn remember_session_error(message: &str) {
+    LAST_SESSION_ERROR.with(|slot| {
+        *slot.borrow_mut() = Some(message.to_owned());
+    });
+}
+
+fn last_session_error() -> Option<String> { LAST_SESSION_ERROR.with(|slot| slot.borrow().clone()) }
 
 fn summarize_chat_message(value: &JsValue) -> String {
     let scope = string_property(value, "scope").unwrap_or_else(|| "world".to_owned());

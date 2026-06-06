@@ -28,6 +28,8 @@ const SNAPSHOT_ENTITY_LIMIT: usize = 96;
 const SNAPSHOT_INVENTORY_ITEM_LIMIT: usize = 8;
 const PICKUP_INTERACTION_DISTANCE: f32 = 4.0;
 const ENTITY_INTERACTION_DISTANCE: f32 = 5.0;
+const JOIN_TIMEOUT: Duration = Duration::from_secs(90);
+const CHARACTER_ERROR_LIMIT: usize = 3;
 const WEB_VIEW_DISTANCE: ViewDistances = ViewDistances {
     terrain: 5,
     entity: 5,
@@ -249,7 +251,9 @@ fn run_session_inner(
     let mut inputs = ControllerInputs::default();
     let mut character_create_requested = false;
     let mut character_join_requested = false;
+    let mut character_errors = 0;
     let mut in_game = false;
+    let join_started = Instant::now();
     let mut last_snapshot = Instant::now() - SNAPSHOT_INTERVAL;
 
     loop {
@@ -280,7 +284,16 @@ fn run_session_inner(
                 Event::CharacterError(error) => {
                     character_create_requested = false;
                     character_join_requested = false;
-                    send_json(&outbound, SessionMessage::Error { message: error });
+                    character_errors += 1;
+                    send_json(&outbound, SessionMessage::Error {
+                        message: error.clone(),
+                    });
+                    if character_errors >= CHARACTER_ERROR_LIMIT {
+                        return Err(format!(
+                            "character setup failed after {CHARACTER_ERROR_LIMIT} attempts: \
+                             {error}"
+                        ));
+                    }
                 },
                 Event::Disconnect => {
                     return Err("server disconnected the session".to_owned());
@@ -295,6 +308,13 @@ fn run_session_inner(
                 },
                 _ => {},
             }
+        }
+
+        if !in_game && join_started.elapsed() > JOIN_TIMEOUT {
+            return Err(format!(
+                "timed out joining game session after {} seconds",
+                JOIN_TIMEOUT.as_secs()
+            ));
         }
 
         if !in_game {

@@ -15,7 +15,9 @@ The gateway defaults to 100 active `/play` sessions, matching the server's
 default player cap. Override it with `--max-sessions` or
 `VOXWORLD_WEB_MAX_SESSIONS`. Browser play sessions receive WebSocket pings every
 30 seconds by default; override that with `--play-ping-interval-secs` or
-`VOXWORLD_WEB_PING_INTERVAL_SECS`.
+`VOXWORLD_WEB_PING_INTERVAL_SECS`. A browser play session must finish character
+setup and enter the game within 90 seconds, otherwise the gateway sends a clear
+error message and closes the session.
 
 ## Run
 
