@@ -12,10 +12,10 @@ platform work can land without disturbing the production server or native client
 - Static web page that can be hosted by any HTTP server
 - Same-origin `/play` connection default for Railway and local gateway hosting
 - Server status display includes active browser sessions against the web session cap
-- Keyboard input forwarding for WASD, E/Q vertical movement, Space jump, Shift roll, and basic combat keys
+- Keyboard input forwarding for WASD movement, PageUp/PageDown vertical movement, Space jump, Shift roll, E interact, R wield, Tab loadout swap, and basic combat keys
 - Mouse and touch look-direction forwarding from the canvas
 - Mouse primary and secondary action forwarding from the canvas
-- On-screen touch movement and action controls for mobile browsers
+- On-screen touch movement, combat, interact, wield, and loadout controls for mobile browsers
 - Snapshot-driven canvas view for the player, nearby entities, health, entity health, and energy
 - Browser-persisted guest name passed through `/play?name=...`
 - Browser chat input and session event log over the `/play` transport

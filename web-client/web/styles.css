@@ -175,7 +175,7 @@ body {
 
   .action-pad {
     display: grid;
-    grid-template-columns: repeat(2, minmax(62px, auto));
+    grid-template-columns: repeat(4, minmax(52px, auto));
     gap: 8px;
   }
 
@@ -256,7 +256,7 @@ body {
   }
 
   .action-pad {
-    grid-template-columns: repeat(2, minmax(54px, auto));
+    grid-template-columns: repeat(4, minmax(44px, auto));
     gap: 6px;
   }
 

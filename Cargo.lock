@@ -9232,6 +9232,7 @@ dependencies = [
  "futures-util",
  "serde",
  "serde_json",
+ "specs",
  "tokio",
  "tokio-tungstenite",
  "tracing",

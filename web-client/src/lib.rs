@@ -65,6 +65,17 @@ enum ActionKind {
 }
 
 #[derive(Clone, Copy)]
+enum ControlKind {
+    Interact,
+    Pickup,
+    ToggleWield,
+    SwapLoadout,
+    Sneak,
+    Sit,
+    Respawn,
+}
+
+#[derive(Clone, Copy)]
 enum MoveDirection {
     Forward,
     Back,
@@ -503,6 +514,11 @@ fn install_keyboard_handlers(window: &Window) -> Result<(), JsValue> {
             if !event.repeat() {
                 send_action(action, true);
             }
+        } else if let Some(control) = control_for_key(event.key().as_str()) {
+            event.prevent_default();
+            if !event.repeat() {
+                send_control(control);
+            }
         }
     });
     window.add_event_listener_with_callback("keydown", on_keydown.as_ref().unchecked_ref())?;
@@ -573,11 +589,11 @@ fn update_key(key: &str, pressed: bool) -> bool {
         "s" | "S" | "ArrowDown" => set_movement(MoveDirection::Back, pressed),
         "a" | "A" | "ArrowLeft" => set_movement(MoveDirection::Left, pressed),
         "d" | "D" | "ArrowRight" => set_movement(MoveDirection::Right, pressed),
-        "e" | "E" | "PageUp" => {
+        "PageUp" => {
             INPUT.with(|input| input.borrow_mut().up = pressed);
             true
         },
-        "q" | "Q" | "PageDown" => {
+        "PageDown" => {
             INPUT.with(|input| input.borrow_mut().down = pressed);
             true
         },
@@ -592,6 +608,19 @@ fn action_for_key(key: &str) -> Option<ActionKind> {
         "f" | "F" => Some(ActionKind::Block),
         "j" | "J" => Some(ActionKind::Primary),
         "k" | "K" => Some(ActionKind::Secondary),
+        _ => None,
+    }
+}
+
+fn control_for_key(key: &str) -> Option<ControlKind> {
+    match key {
+        "e" | "E" => Some(ControlKind::Interact),
+        "g" | "G" => Some(ControlKind::Pickup),
+        "r" | "R" => Some(ControlKind::ToggleWield),
+        "Tab" => Some(ControlKind::SwapLoadout),
+        "c" | "C" => Some(ControlKind::Sneak),
+        "x" | "X" => Some(ControlKind::Sit),
+        "l" | "L" => Some(ControlKind::Respawn),
         _ => None,
     }
 }
@@ -619,6 +648,18 @@ fn install_touch_controls(document: &Document) -> Result<(), JsValue> {
     install_action_button(element_by_id(document, "touch-jump")?, ActionKind::Jump)?;
     install_action_button(element_by_id(document, "touch-roll")?, ActionKind::Roll)?;
     install_action_button(element_by_id(document, "touch-block")?, ActionKind::Block)?;
+    install_control_button(
+        element_by_id(document, "touch-interact")?,
+        ControlKind::Interact,
+    )?;
+    install_control_button(
+        element_by_id(document, "touch-wield")?,
+        ControlKind::ToggleWield,
+    )?;
+    install_control_button(
+        element_by_id(document, "touch-swap-loadout")?,
+        ControlKind::SwapLoadout,
+    )?;
     Ok(())
 }
 
@@ -663,6 +704,16 @@ fn install_action_button(button: HtmlElement, action: ActionKind) -> Result<(), 
         on_up.forget();
     }
 
+    Ok(())
+}
+
+fn install_control_button(button: HtmlElement, control: ControlKind) -> Result<(), JsValue> {
+    let on_down = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+        event.prevent_default();
+        send_control(control);
+    });
+    button.add_event_listener_with_callback("pointerdown", on_down.as_ref().unchecked_ref())?;
+    on_down.forget();
     Ok(())
 }
 
@@ -786,6 +837,12 @@ fn send_action(action: ActionKind, pressed: bool) {
     let _ = send_socket_message(&message);
 }
 
+fn send_control(control: ControlKind) {
+    let message = format!(r#"{{"type":"control","control":"{}"}}"#, control.as_str());
+
+    let _ = send_socket_message(&message);
+}
+
 fn send_input_state() {
     let (move_x, move_y, move_z) = INPUT.with(|input| input.borrow().movement());
     let (look_x, look_y, look_z) = INPUT.with(|input| input.borrow().look());
@@ -833,6 +890,20 @@ impl ActionKind {
             Self::Block => "block",
             Self::Roll => "roll",
             Self::Jump => "jump",
+        }
+    }
+}
+
+impl ControlKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Interact => "interact",
+            Self::Pickup => "pickup",
+            Self::ToggleWield => "toggle_wield",
+            Self::SwapLoadout => "swap_loadout",
+            Self::Sneak => "sneak",
+            Self::Sit => "sit",
+            Self::Respawn => "respawn",
         }
     }
 }

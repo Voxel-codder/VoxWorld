@@ -54,6 +54,12 @@ It can also forward basic gameplay actions:
 {"type":"action","action":"primary","pressed":true}
 ```
 
+and one-shot control actions:
+
+```json
+{"type":"control","control":"interact"}
+```
+
 The gateway responds with stage, snapshot, chat, event, and error messages.
 Snapshots currently include username, in-game state, position, health, energy,
 online player names, character count, and up to 96 nearby entity positions with

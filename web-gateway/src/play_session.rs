@@ -15,6 +15,7 @@ use common::{
     util::dir::Dir,
 };
 use serde::{Deserialize, Serialize};
+use specs::Entity as EcsEntity;
 use tokio::{runtime::Runtime, sync::mpsc::UnboundedSender};
 use tracing::{error, warn};
 use vek::{Vec2, Vec3};
@@ -46,6 +47,9 @@ pub enum BrowserCommand {
         action: BrowserAction,
         pressed: bool,
     },
+    Control {
+        control: BrowserControl,
+    },
 }
 
 #[derive(Debug, Deserialize, Clone, Copy)]
@@ -56,6 +60,18 @@ pub enum BrowserAction {
     Block,
     Roll,
     Jump,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserControl {
+    Interact,
+    Pickup,
+    ToggleWield,
+    SwapLoadout,
+    Sneak,
+    Sit,
+    Respawn,
 }
 
 impl BrowserAction {
@@ -325,10 +341,70 @@ fn handle_browser_commands(
             Ok(BrowserCommand::Action { action, pressed }) => {
                 client.handle_input(action.input_kind(), pressed, None, None);
             },
+            Ok(BrowserCommand::Control { control }) => {
+                handle_browser_control(client, control);
+            },
             Err(mpsc::TryRecvError::Empty) => return true,
             Err(mpsc::TryRecvError::Disconnected) => return false,
         }
     }
+}
+
+fn handle_browser_control(client: &mut Client, control: BrowserControl) {
+    match control {
+        BrowserControl::Interact => {
+            if let Some(entity) = nearest_pickup_entity(client) {
+                client.pick_up(entity);
+            } else if let Some(entity) = nearest_interactable_entity(client) {
+                client.npc_interact(entity);
+            }
+        },
+        BrowserControl::Pickup => {
+            if let Some(entity) = nearest_pickup_entity(client) {
+                client.pick_up(entity);
+            }
+        },
+        BrowserControl::ToggleWield => client.toggle_wield(),
+        BrowserControl::SwapLoadout => client.swap_loadout(),
+        BrowserControl::Sneak => client.toggle_sneak(),
+        BrowserControl::Sit => client.toggle_sit(),
+        BrowserControl::Respawn => {
+            let _ = client.respawn();
+        },
+    }
+}
+
+fn nearest_pickup_entity(client: &Client) -> Option<EcsEntity> {
+    nearest_entity_with_component::<comp::PickupItem>(client, 4.0)
+}
+
+fn nearest_interactable_entity(client: &Client) -> Option<EcsEntity> {
+    nearest_entity_with_component::<comp::Body>(client, 5.0)
+}
+
+fn nearest_entity_with_component<C>(client: &Client, max_distance: f32) -> Option<EcsEntity>
+where
+    C: specs::Component,
+{
+    let origin = client.position()?;
+    let self_entity = client.entity();
+    let ecs = client.state().ecs();
+    let ecs_entities = ecs.entities();
+    let positions = ecs.read_storage::<comp::Pos>();
+    let targets = ecs.read_storage::<C>();
+
+    (&ecs_entities, &positions, &targets)
+        .join()
+        .filter_map(|(entity, position, _)| {
+            if entity == self_entity {
+                return None;
+            }
+
+            let distance = (position.0 - origin).magnitude();
+            (distance.is_finite() && distance <= max_distance).then_some((entity, distance))
+        })
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))
+        .map(|(entity, _)| entity)
 }
 
 #[cfg(test)]
@@ -337,7 +413,7 @@ mod tests {
 
     use common::comp::{ChatType, Content};
 
-    use super::{BrowserAction, BrowserCommand, chat_scope, content_text};
+    use super::{BrowserAction, BrowserCommand, BrowserControl, chat_scope, content_text};
 
     #[test]
     fn decodes_browser_action_command() {
@@ -349,6 +425,20 @@ mod tests {
             BrowserCommand::Action { action, pressed } => {
                 assert!(matches!(action, BrowserAction::Primary));
                 assert!(pressed);
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decodes_browser_control_command() {
+        let command: BrowserCommand =
+            serde_json::from_str(r#"{"type":"control","control":"interact"}"#)
+                .expect("control command should decode");
+
+        match command {
+            BrowserCommand::Control { control } => {
+                assert!(matches!(control, BrowserControl::Interact));
             },
             other => panic!("unexpected command: {other:?}"),
         }
