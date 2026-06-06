@@ -13,7 +13,11 @@ Current milestone:
 - compile the original `common` and `world` crates for `wasm32-unknown-unknown`;
 - load the first original world asset manifests from a WASM embedded
   `common-assets` source;
+- embed the original world `.vox` structure assets needed by terrain
+  decorations;
 - generate a small original `WorldSim` in the browser build path;
+- run original spot placement and enable terrain decorations, trees, shrubs, and
+  spot structures in the generated preview chunk;
 - call the real `World::generate_chunk` path and convert the generated
   `TerrainChunk` blocks into a WebGPU 3D block-face mesh with a camera,
   vertex/index buffers, and depth testing;
@@ -24,8 +28,8 @@ Next milestones:
 
 - replace the temporary block-face mesh with Voxygen's real greedy terrain mesh
   and atlas/material pipeline;
-- embed the structure `.vox` subsets needed to turn terrain decorations, trees,
-  shrubs, and site structures back on in the web scene;
+- stream and render multiple generated chunks around the camera instead of a
+  single fixed preview chunk;
 - attach player/session state so the scene follows the live character instead
   of a fixed terrain camera;
 - introduce a browser-safe client transport that maps Voxygen networking onto a

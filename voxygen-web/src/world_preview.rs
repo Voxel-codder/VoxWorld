@@ -1,4 +1,5 @@
 use common::{
+    spot::Spot,
     terrain::{Block, TerrainChunk, TerrainChunkSize},
     vol::{ReadVol, RectVolSize},
 };
@@ -8,6 +9,7 @@ use veloren_world::{
     World,
     config::Features,
     index::{Index, IndexOwned, IndexRef},
+    layer::spot::SpotGenerate,
     sim::{FileOpts, GenOpts, WorldOpts, WorldSim},
 };
 
@@ -36,7 +38,7 @@ pub fn build_original_world_mesh() -> Result<OriginalWorldMesh, String> {
         .use_current_thread()
         .build()
         .map_err(|error| format!("failed to create browser worldgen threadpool: {error}"))?;
-    let sim = WorldSim::generate(
+    let mut sim = WorldSim::generate(
         SEED,
         WorldOpts {
             seed_elements: true,
@@ -50,6 +52,7 @@ pub fn build_original_world_mesh() -> Result<OriginalWorldMesh, String> {
         &threadpool,
         &|_| {},
     );
+    Spot::generate(&mut sim);
     let dimensions = sim.get_size();
     if dimensions.x < 2 || dimensions.y < 2 {
         return Err("original WorldSim generated too few chunks for terrain mesh".to_owned());
@@ -87,13 +90,11 @@ fn terrain_chunk_preview_features(features: &Features) -> Features {
         caverns: features.caverns,
         caves: features.caves,
         rocks: features.rocks,
-        // These layers can pull .vox structure assets; they are enabled once the web
-        // asset pack grows beyond the first world manifest bundle.
-        shrubs: false,
-        trees: false,
+        shrubs: features.shrubs,
+        trees: features.trees,
         scatter: features.scatter,
         paths: features.paths,
-        spots: false,
+        spots: features.spots,
         wildlife_density: features.wildlife_density,
         peak_naming: features.peak_naming,
         biome_naming: features.biome_naming,
