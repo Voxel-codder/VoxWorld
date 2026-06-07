@@ -120,6 +120,10 @@ Current milestone:
 - orient generated entity and site NPC/trader/market markers with stable yaw
   derived from original spawn positions and settlement plot positions instead
   of rendering every temporary silhouette at yaw 0;
+- include original generated `EntityInfo` metadata in nearest-target and
+  interaction summaries, including generated names, loot, inventory stack
+  counts, generated loadout hooks, skillsets, trade inventory, pets, riders,
+  special roles, agency flags, and scale/aggro/wander modifiers;
 - keep this as the stable place for future Voxygen renderer/HUD migration;
 - avoid extending the temporary 2D canvas client as if it were the final game.
 

@@ -1570,10 +1570,16 @@ impl EntityFocus<'_> {
     fn summary(&self) -> String {
         let role = entity_role_label(self.entity);
         let body = entity_body_label(&self.entity.body);
-        format!(
-            "{} {} {:?} at {:.1}m",
-            role, body, self.entity.alignment, self.distance
-        )
+        let name = entity_name_label(self.entity);
+        let details = entity_metadata_summary(self.entity);
+        let mut summary = format!(
+            "{} {} {} {:?} at {:.1}m",
+            role, name, body, self.entity.alignment, self.distance
+        );
+        if !details.is_empty() {
+            summary.push_str(&format!(" ({details})"));
+        }
+        summary
     }
 
     fn action_summary(&self) -> String {
@@ -1589,6 +1595,99 @@ impl EntityFocus<'_> {
         };
         format!("{verb} {}", self.summary())
     }
+}
+
+fn entity_name_label(entity: &EntityInfo) -> String {
+    entity
+        .name
+        .as_ref()
+        .map(|name| compact_debug_label(name, 72))
+        .unwrap_or_else(|| "unnamed".to_owned())
+}
+
+fn entity_metadata_summary(entity: &EntityInfo) -> String {
+    let mut tags = Vec::new();
+
+    if !matches!(entity.loot, common::lottery::LootSpec::Nothing) {
+        tags.push("loot".to_owned());
+    }
+
+    if !entity.inventory.is_empty() {
+        let item_count = entity
+            .inventory
+            .iter()
+            .map(|(amount, _)| u64::from(*amount))
+            .sum::<u64>();
+        tags.push(format!(
+            "{} inventory stacks / {} items",
+            entity.inventory.len(),
+            item_count
+        ));
+    }
+
+    if entity.make_loadout.is_some() {
+        tags.push("generated loadout".to_owned());
+    }
+    if entity.skillset_asset.is_some() {
+        tags.push("skillset".to_owned());
+    }
+    if entity.trading_information.is_some() {
+        tags.push("trade inventory".to_owned());
+    }
+    if !entity.pets.is_empty() {
+        tags.push(format!("{} pets", entity.pets.len()));
+    }
+    if entity.rider.is_some() {
+        tags.push("rider".to_owned());
+    }
+    if entity.death_effects.is_some() {
+        tags.push("death effects".to_owned());
+    }
+    if entity.rider_effects.is_some() {
+        tags.push("rider effects".to_owned());
+    }
+    if entity.agent_mark.is_some() {
+        tags.push("agent mark".to_owned());
+    }
+    if entity.no_flee {
+        tags.push("no flee".to_owned());
+    }
+    if !entity.has_agency {
+        tags.push("no agency".to_owned());
+    }
+    if (entity.scale - 1.0).abs() > 0.05 {
+        tags.push(format!("scale {:.2}", entity.scale));
+    }
+    if (entity.aggro_range_multiplier - 1.0).abs() > 0.05 {
+        tags.push(format!("aggro x{:.2}", entity.aggro_range_multiplier));
+    }
+    if (entity.idle_wander_factor - 1.0).abs() > 0.05 {
+        tags.push(format!("wander x{:.2}", entity.idle_wander_factor));
+    }
+    if let Some(special_entity) = &entity.special_entity {
+        tags.push(format!(
+            "special {}",
+            compact_debug_label(special_entity, 48)
+        ));
+    }
+
+    tags.join(", ")
+}
+
+fn compact_debug_label(value: &impl std::fmt::Debug, max_chars: usize) -> String {
+    let compact = format!("{value:?}")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let char_count = compact.chars().count();
+    if char_count <= max_chars {
+        return compact;
+    }
+
+    let keep_chars = max_chars.saturating_sub(3);
+    let mut truncated = compact.chars().take(keep_chars).collect::<String>();
+    truncated.push_str("...");
+    truncated
 }
 
 struct SiteMarkerFocus<'a> {
