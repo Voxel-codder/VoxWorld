@@ -1,0 +1,84 @@
+# syntax=docker/dockerfile:1
+# Railway deployment image: game server + web gateway + browser client.
+# Railpack cannot resolve the pinned dated nightly in `rust-toolchain`
+# ("nightly-2025-09-08"), so we build with a plain Dockerfile where rustup
+# handles the toolchain pin natively.
+
+FROM rust:1-slim-bookworm AS builder
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        pkg-config \
+        mold \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# wasm-bindgen CLI version must match the wasm-bindgen crate in Cargo.lock.
+# Installed with the image's stable toolchain, before COPY, so the layer is
+# cached across source changes.
+RUN cargo install wasm-bindgen-cli --version 0.2.106 --locked
+
+# Install the pinned toolchain as its own cached layer.
+COPY rust-toolchain ./
+RUN rustup toolchain install "$(tr -d '[:space:]' < rust-toolchain)" \
+        --profile minimal \
+        --target wasm32-unknown-unknown
+
+COPY . .
+
+# Railway builds have no usable git history; embed a fixed version stamp.
+# Clients are built with the same stamp so the version check matches.
+ENV VELOREN_GIT_VERSION=/0/0
+
+RUN --mount=type=cache,id=voxworld-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=voxworld-target,target=/app/target \
+    cargo build --release --locked \
+        -p voxworld-server-cli \
+        -p voxworld-web-gateway \
+    && mkdir -p /out \
+    && cp target/release/voxworld-server-cli /out/ \
+    && cp target/release/voxworld-web-gateway /out/
+
+RUN --mount=type=cache,id=voxworld-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=voxworld-target,target=/app/target \
+    cargo build --release --locked \
+        -p voxworld-voxygen-web \
+        --target wasm32-unknown-unknown \
+    && cp target/wasm32-unknown-unknown/release/voxworld_voxygen_web.wasm /out/
+
+RUN wasm-bindgen \
+        --target web \
+        --out-dir /out/pkg \
+        /out/voxworld_voxygen_web.wasm \
+    && test -s /out/pkg/voxworld_voxygen_web.js \
+    && test -s /out/pkg/voxworld_voxygen_web_bg.wasm
+
+FROM debian:bookworm-slim AS runtime
+
+# SIGUSR1 triggers a graceful server shutdown.
+LABEL com.centurylinklabs.watchtower.stop-signal="SIGUSR1"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        bash \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /out/voxworld-server-cli /app/target/release/voxworld-server-cli
+COPY --from=builder /out/voxworld-web-gateway /app/target/release/voxworld-web-gateway
+COPY assets /app/assets
+COPY voxygen-web/web /app/voxygen-web/web
+COPY --from=builder /out/pkg /app/voxygen-web/web/pkg
+COPY scripts/railway-start.sh /app/scripts/railway-start.sh
+
+ENV VELOREN_ASSETS=/app/assets \
+    RUST_LOG=info,common::net=info
+
+EXPOSE 8080 14004
+
+CMD ["bash", "scripts/railway-start.sh"]

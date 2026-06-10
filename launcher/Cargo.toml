@@ -1,0 +1,25 @@
+[package]
+name = "voxworld-launcher"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+# Standalone workspace so the main game workspace doesn't try to build this
+# (and vice versa). Built separately with its own dependency tree.
+[workspace]
+
+[dependencies]
+eframe = "0.31"
+ureq = "2.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zip = "2"
+sha2 = "0.10"
+
+[build-dependencies]
+winres = "0.1"
+
+[profile.release]
+opt-level = 2
+lto = true
+strip = true
