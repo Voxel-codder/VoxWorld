@@ -33,8 +33,8 @@ COPY . .
 # Clients are built with the same stamp so the version check matches.
 ENV VELOREN_GIT_VERSION=/0/0
 
-RUN --mount=type=cache,id=voxworld-cargo-registry,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=voxworld-target,target=/app/target \
+RUN --mount=type=cache,id=s/1521a77a-e7a8-413e-960e-3bf6551818be-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=s/1521a77a-e7a8-413e-960e-3bf6551818be-target,target=/app/target \
     cargo build --release --locked \
         -p voxworld-server-cli \
         -p voxworld-web-gateway \
@@ -42,8 +42,8 @@ RUN --mount=type=cache,id=voxworld-cargo-registry,target=/usr/local/cargo/regist
     && cp target/release/voxworld-server-cli /out/ \
     && cp target/release/voxworld-web-gateway /out/
 
-RUN --mount=type=cache,id=voxworld-cargo-registry,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=voxworld-target,target=/app/target \
+RUN --mount=type=cache,id=s/1521a77a-e7a8-413e-960e-3bf6551818be-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=s/1521a77a-e7a8-413e-960e-3bf6551818be-target,target=/app/target \
     cargo build --release --locked \
         -p voxworld-voxygen-web \
         --target wasm32-unknown-unknown \
